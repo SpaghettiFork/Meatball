@@ -1,0 +1,4 @@
+option('egl_renderer', type: 'boolean', value: true,
+       description: 'Include the EGL backend which provides hardware acceleration for Wayland apps.')
+option('module_dir', type: 'string', value: 'xorg/modules',
+       description: 'X.Org modules directory (absolute or relative to the directory specified by the libdir option)')
