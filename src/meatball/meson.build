@@ -1,6 +1,7 @@
 headers_meatball = []
 
 srcs_meatball = [
+    'meatball_log.c',
     'meatball.c',
     'run.c',
     'alloc.c',

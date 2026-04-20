@@ -1074,8 +1074,8 @@ WriteFormatTable(void)
 	   can be obtained.  */
 	if (!InitDrmDevices())
 	{
-		LogMessage(X_ERROR, "meatball: Failed to get direct rendering device node. "
-							"Hardware acceleration will probably be unavailable.\n");
+		mb_log(X_ERROR, "meatball: Failed to get direct rendering device node. "
+						"Hardware acceleration will probably be unavailable.\n");
 		return -1;
 	}
 
@@ -1083,8 +1083,8 @@ WriteFormatTable(void)
 
 	if (fd < 0)
 	{
-		LogMessage(X_ERROR, "Failed to allocate format table fd. "
-							"Hardware acceleration will probably be unavailable.\n");
+		mb_log(X_ERROR, "Failed to allocate format table fd. "
+						"Hardware acceleration will probably be unavailable.\n");
 		return -1;
 	}
 
@@ -1123,13 +1123,16 @@ ReadSupportedFormats(void)
 	return n_drm_formats > 0;
 }
 
-void XLInitDmabuf(void)
+Bool
+XLInitDmabuf(void)
 {
 	ssize_t size;
 
 	/* First, initialize supported formats.  */
-	if (!ReadSupportedFormats())
-		return;
+	if (!ReadSupportedFormats()) {
+		mb_log(X_WARNING, "meatball/dmabuf: ReadSupportedFormats returned FALSE\n");
+		return FALSE;
+	}
 
 	/* And try to create the format table.  */
 	size = WriteFormatTable();
@@ -1143,4 +1146,6 @@ void XLInitDmabuf(void)
 
 	/* If the format table was successfully created, set its size.  */
 	format_table_size = size;
+
+	return TRUE;
 }

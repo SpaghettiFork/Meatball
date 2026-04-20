@@ -290,7 +290,7 @@ AllocPropAtom(void)
 	{
 		if (IntAddWrapv(prop_counter, 1, &prop_counter))
 		{
-			LogMessage(X_ERROR, "meatball: Failed to allocate selection property"
+			mb_log(X_ERROR, "meatball: Failed to allocate selection property"
 								" after running out of valid values!");
 			abort();
 		}

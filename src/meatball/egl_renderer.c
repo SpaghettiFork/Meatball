@@ -419,7 +419,7 @@ static unsigned int damage_mode = 0;
 	{                                                   \
 		if (display)                                    \
 			eglTerminate(display);                      \
-		LogMessage(X_ERROR, "meatball: Missing: egl%s\n", #name + 1); \
+		mb_log(X_ERROR, "meatball: Missing: egl%s\n", #name + 1); \
 		return False;                                   \
 	}
 
@@ -431,7 +431,7 @@ static unsigned int damage_mode = 0;
 		eglMakeCurrent(display, EGL_NO_SURFACE,         \
 					   EGL_NO_SURFACE, EGL_NO_CONTEXT); \
 		eglTerminate(display);                          \
-		LogMessage(X_ERROR, "meatball: Missing: gl%s\n", #name + 1);  \
+		mb_log(X_ERROR, "meatball: Missing: gl%s\n", #name + 1);  \
 		return False;                                   \
 	}
 
@@ -446,7 +446,7 @@ static unsigned int damage_mode = 0;
 #define CheckGlExtension(name)                  \
 	if (!epoxy_has_gl_extension(name))                 \
 	{                                           \
-		LogMessage(X_ERROR, "meatball: Missing %s\n", name);  \
+		mb_log(X_ERROR, "meatball: Missing %s\n", name);  \
                                                 \
 		eglMakeCurrent(display, EGL_NO_SURFACE, \
 					   EGL_NO_SURFACE,          \
@@ -793,7 +793,7 @@ CheckShaderCompilation(GLuint shader, const char *name) {
 	glGetShaderInfoLog(shader, sizeof msg, NULL, msg);
 
 	/* Report shader compilation error.  */
-	LogMessage(X_ERROR, "meatball: Failed to compile shader %s: %s\n", name, msg);
+	mb_log(X_ERROR, "meatball: Failed to compile shader %s: %s\n", name, msg);
 	abort();
 }
 
@@ -810,7 +810,7 @@ CheckProgramLink(GLuint program, const char *name) {
 	glGetProgramInfoLog(program, sizeof msg, NULL, msg);
 
 	/* Report shader compilation error.  */
-	LogMessage(X_ERROR, "meatball: Failed to link program %s: %s\n", name, msg);
+	mb_log(X_ERROR, "meatball: Failed to link program %s: %s\n", name, msg);
 	abort();
 }
 
@@ -935,7 +935,7 @@ EglInitDisplay(void) {
 	if (!epoxy_has_egl_extension(egl_display, "EGL_EXT_image_dma_buf_import")) {
 		eglTerminate(display);
 
-		LogMessage(X_ERROR, "meatball(EGL): EGL_EXT_image_dma_buf_import not found.\n");
+		mb_log(X_ERROR, "meatball(EGL): EGL_EXT_image_dma_buf_import not found.\n");
 		return False;
 	}
 
@@ -2105,7 +2105,7 @@ InitBufferFuncs(void) {
 		drm_device_available = True;
 	} else
 	failed:
-		LogMessage(X_WARNING, "Failed to obtain device node of"
+		mb_log(X_WARNING, "Failed to obtain device node of"
 		        " EGL display.  Hardware acceleration will probably not"
 		        " be available.\n");
 
@@ -2115,7 +2115,7 @@ InitBufferFuncs(void) {
 	/* And initialize the SHM formats that are supported.  */
 	InitShmFormats();
 
-	LogMessage(X_INFO, "meatball: EGL backend is running.\n");
+	mb_log(X_INFO, "meatball: EGL backend is running.\n");
 }
 
 static Bool

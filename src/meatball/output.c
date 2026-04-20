@@ -563,7 +563,7 @@ MakeGlobal(Output *output)
 
 	if (!output->global)
 	{
-		LogMessage(X_ERROR, "meatball: Failed to allocate global output\n");
+		mb_log(X_ERROR, "meatball: Failed to allocate global output\n");
 		exit(1);
 	}
 }
@@ -1008,7 +1008,7 @@ void XLOutputGetMinRefresh(struct timespec *timespec)
 	   case, fall back to 30 fps.  */
 	if (min_refresh == 0.0)
 	{
-		LogMessage(X_WARNING, "meatball: defaulting to 30 Hz refresh rate\n");
+		mb_log(X_WARNING, "meatball: defaulting to 30 Hz refresh rate\n");
 		return;
 	}
 
@@ -1190,7 +1190,8 @@ void XLOutputHandleScaleChange(int new_scale)
 		HandleScaleChange(real_scale_factor);
 }
 
-void XLInitRROutputs(void)
+Bool
+XLInitRROutputs(void)
 {
 	Bool extension;
 
@@ -1200,9 +1201,9 @@ void XLInitRROutputs(void)
 
 	if (!extension)
 	{
-		LogMessage(X_ERROR, "meatball: Display '%s' does not support the RandR extension\n",
-							DisplayString(compositor.display));
-		abort();
+		mb_log(X_ERROR, "meatball: Display '%s' does not support the RandR extension\n",
+						DisplayString(compositor.display));
+		return FALSE;
 	}
 
 	XRRQueryVersion(compositor.display,
@@ -1211,10 +1212,10 @@ void XLInitRROutputs(void)
 
 	if (compositor.rr_major < 1 || (compositor.rr_major == 1 && compositor.rr_minor < 4))
 	{
-		LogMessage(X_ERROR, "meatball: Display '%s' does not support a"
-							" sufficiently new version of the RandR extension\n",
-							DisplayString(compositor.display));
-		abort();
+		mb_log(X_ERROR, "meatball: Display '%s' does not support a"
+						" sufficiently new version of the RandR extension\n",
+						DisplayString(compositor.display));
+		return FALSE;
 	}
 
 	/* Set the initial scale.  */
@@ -1240,4 +1241,6 @@ void XLInitRROutputs(void)
 
 	all_outputs = BuildOutputTree();
 	MakeGlobalsForOutputTree(all_outputs);
+
+	return TRUE;
 }

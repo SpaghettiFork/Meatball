@@ -461,14 +461,18 @@ void XLWaitFence(Surface *surface)
 	RenderDeleteFence(fence);
 }
 
-void XLInitExplicitSynchronization(void)
+Bool
+XLInitExplicitSynchronization(void)
 {
 	/* If the renderer does not support explicit synchronization,
-	   return.  */
+	 * return. */
 	if (!(renderer_flags & SupportsExplicitSync))
-		return;
+		goto exit;
 
 	explicit_sync_global = wl_global_create(compositor.wl_display,
 											&zwp_linux_explicit_synchronization_v1_interface,
 											2, NULL, HandleBind);
+
+exit:
+	return TRUE;
 }

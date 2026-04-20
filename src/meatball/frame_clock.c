@@ -908,7 +908,8 @@ void XLStopCursorClock(void)
 	cursor_clock = NULL;
 }
 
-void XLInitFrameClock(void)
+Bool
+XLInitFrameClock(void)
 {
 	if (!getenv("MEATBALL_DISABLE_FRAME_SYNCHRONIZATION"))
 		frame_sync_supported = XLWmSupportsHint(_NET_WM_FRAME_DRAWN);
@@ -916,4 +917,6 @@ void XLInitFrameClock(void)
 	/* Initialize cursor callbacks.  */
 	cursor_callbacks.next = &cursor_callbacks;
 	cursor_callbacks.last = &cursor_callbacks;
+
+	return TRUE;
 }

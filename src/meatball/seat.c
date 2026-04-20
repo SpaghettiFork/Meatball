@@ -4712,7 +4712,7 @@ WriteKeymap(void)
 
 	if (keymap_fd < 0)
 	{
-		LogMessage(X_ERROR, "meatball: Failed to allocate keymap fd\n");
+		mb_log(X_ERROR, "meatball: Failed to allocate keymap fd\n");
 		exit(1);
 	}
 
@@ -4742,7 +4742,7 @@ WriteKeymap(void)
 						 False, NULL, NULL);
 
 	if (!ok)
-		LogMessage(X_WARNING, "meatball: the XKB keymap could not be written\n"
+		mb_log(X_WARNING, "meatball: the XKB keymap could not be written\n"
 							  "Programs might not continue to interpret keyboard input"
 							  " correctly.\n");
 
@@ -4754,28 +4754,28 @@ AfterMapUpdate(void)
 {
 	if (XkbGetIndicatorMap(compositor.display, ~0, xkb_desc) != Success)
 	{
-		LogMessage(X_ERROR, "meatball: Could not load indicator map\n");
+		mb_log(X_ERROR, "meatball: Could not load indicator map\n");
 		exit(1);
 	}
 
 	if (XkbGetControls(compositor.display,
 					   XkbAllControlsMask, xkb_desc) != Success)
 	{
-		LogMessage(X_ERROR, "meatball: Could not load keyboard controls\n");
+		mb_log(X_ERROR, "meatball: Could not load keyboard controls\n");
 		exit(1);
 	}
 
 	if (XkbGetCompatMap(compositor.display,
 						XkbAllCompatMask, xkb_desc) != Success)
 	{
-		LogMessage(X_ERROR, "meatball: Could not load compatibility map\n");
+		mb_log(X_ERROR, "meatball: Could not load compatibility map\n");
 		exit(1);
 	}
 
 	if (XkbGetNames(compositor.display,
 					XkbAllNamesMask, xkb_desc) != Success)
 	{
-		LogMessage(X_ERROR, "meatball: Could not load names\n");
+		mb_log(X_ERROR, "meatball: Could not load names\n");
 		exit(1);
 	}
 }
@@ -4816,7 +4816,7 @@ SetupKeymap(void)
 	if (!XkbLibraryVersion(&xkb_major, &xkb_minor) || !XkbQueryExtension(compositor.display, &xkb_op, &xkb_event_type,
 																		 &xkb_error_code, &xkb_major, &xkb_minor))
 	{
-		LogMessage(X_ERROR, "meatball: Failed to set up Xkb\n");
+		mb_log(X_ERROR, "meatball: Failed to set up Xkb\n");
 		exit(1);
 	}
 
@@ -4826,7 +4826,7 @@ SetupKeymap(void)
 
 	if (!xkb_desc)
 	{
-		LogMessage(X_ERROR, "meatball: Failed to retrieve keymap from X server\n");
+		mb_log(X_ERROR, "meatball: Failed to retrieve keymap from X server\n");
 		exit(1);
 	}
 
@@ -4856,7 +4856,7 @@ HandleXkbEvent(XkbEvent *event)
 
 		if (!xkb_desc)
 		{
-			LogMessage(X_ERROR, "meatball: Failed to retrieve keymap from X server\n");
+			mb_log(X_ERROR, "meatball: Failed to retrieve keymap from X server\n");
 			exit(1);
 		}
 
@@ -5944,7 +5944,8 @@ XLSeatGetLastUserTime(Seat *seat)
 	return GetLastUserTime(seat);
 }
 
-void XLInitSeats(void)
+Bool
+XLInitSeats(void)
 {
 	int rc;
 
@@ -5959,9 +5960,9 @@ void XLInitSeats(void)
 
 		if (xi2_major < 2 || (xi2_major == 2 && xi2_minor < 3) || rc)
 		{
-			LogMessage(X_ERROR, "meatball: version 2.3 or later of of the X Input Extension is"
-								" not present on the X server\n");
-			exit(1);
+			mb_log(X_ERROR, "meatball: version 2.3 or later of of the X Input Extension is"
+							" not present on the X server\n");
+			return FALSE;
 		}
 	}
 
@@ -5972,6 +5973,8 @@ void XLInitSeats(void)
 	SelectDeviceEvents();
 	SetupInitialDevices();
 	SetupKeymap();
+
+	return TRUE;
 }
 
 DataSource *

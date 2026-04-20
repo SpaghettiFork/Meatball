@@ -20,10 +20,6 @@
 
 #include <pthread.h>
 
-#ifdef HAVE_XORG_CONFIG_H
-#include <xorg-config.h>
-#endif
-
 typedef int _MEATBALL_BOOL;
 
 enum MEATBALL_BOOL
@@ -49,6 +45,12 @@ enum meatball_flags
 
 struct meatball_config
 {
+	char						display_name[8];
+
+	char						*auth_file;
+
+	int 						log_pipe_write_fd;
+
 	/**
 	 * File descriptor for the GPU used by the DDX.
 	 * 

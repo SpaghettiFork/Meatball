@@ -104,11 +104,14 @@ HandleBind(struct wl_client *client, void *data,
 	wl_resource_set_implementation(resource, &manager_impl, NULL, NULL);
 }
 
-void XLInitRelativePointer(void)
+Bool
+XLInitRelativePointer(void)
 {
 	relative_pointer_manager_global = wl_global_create(compositor.wl_display,
 													   &zwp_relative_pointer_manager_v1_interface,
 													   1, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLRelativePointerSendRelativeMotion(struct wl_resource *resource,

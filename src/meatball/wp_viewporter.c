@@ -242,11 +242,14 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 								   NULL);
 }
 
-void XLInitWpViewporter(void)
+Bool
+XLInitWpViewporter(void)
 {
 	viewporter_global = wl_global_create(compositor.wl_display,
 										 &wp_viewporter_interface,
 										 1, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLWpViewportReportBadSize(ViewportExt *ext)

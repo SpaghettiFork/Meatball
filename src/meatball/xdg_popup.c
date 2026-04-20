@@ -846,7 +846,8 @@ Bool XLHandleXEventForXdgPopups(XEvent *event)
 	return False;
 }
 
-void XLInitPopups(void)
+Bool
+XLInitPopups(void)
 {
-	/* Nothing to do here.  */
+	return TRUE;
 }

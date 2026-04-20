@@ -64,9 +64,12 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 	wl_resource_set_implementation(resource, &xdg_system_bell_impl, NULL, NULL);
 }
 
-void XLInitSystemBell(void)
+Bool
+XLInitSystemBell(void)
 {
 	xdg_system_bell_global = wl_global_create(compositor.wl_display,
-												  &xdg_system_bell_v1_interface,
-												  1, NULL, HandleBind);
+											  &xdg_system_bell_v1_interface,
+											  1, NULL, HandleBind);
+
+	return TRUE;
 }

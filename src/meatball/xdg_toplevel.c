@@ -2682,7 +2682,7 @@ ParseWmProtocols(const char *string)
 		if (!strcmp(buffer, "netWmPing"))
 			wm_protocols |= NetWmPingMask;
 		else
-			LogMessage(X_WARNING, "meatball: encountered invalid window manager "
+			mb_log(X_WARNING, "meatball: encountered invalid window manager "
 								  "protocol: %s\n", buffer);
 
 		string = sep + 1;
@@ -2691,7 +2691,8 @@ ParseWmProtocols(const char *string)
 	return wm_protocols;
 }
 
-void XLInitXdgToplevels(void)
+Bool
+XLInitXdgToplevels(void)
 {
 	const char *wm_protocols;
 
@@ -2703,6 +2704,8 @@ void XLInitXdgToplevels(void)
 	wm_protocols = "netWmPing,";
 	ReadWmProtocolsString(&wm_protocols);
 	window_manager_protocols = ParseWmProtocols(wm_protocols);
+
+	return TRUE;
 }
 
 Bool XLIsXdgToplevel(Window window)

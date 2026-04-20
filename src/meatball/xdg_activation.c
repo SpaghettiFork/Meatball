@@ -376,9 +376,12 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 								   NULL, NULL);
 }
 
-void XLInitXdgActivation(void)
+Bool
+XLInitXdgActivation(void)
 {
 	xdg_activation_global = wl_global_create(compositor.wl_display,
 											 &xdg_activation_v1_interface,
 											 1, NULL, HandleBind);
+
+	return TRUE;
 }

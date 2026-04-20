@@ -2258,7 +2258,8 @@ Bool XLNoteLocalPrimary(Seat *seat, PDataSource *source)
 							 XLPDataSourceHasTarget);
 }
 
-void XLInitXData(void)
+Bool
+XLInitXData(void)
 {
 	struct sigaction act;
 	int rc, fixes_error_base, major, minor;
@@ -2269,9 +2270,9 @@ void XLInitXData(void)
 
 	if (!rc)
 	{
-		LogMessage(X_ERROR, "meatball: The X server does not support the "
-							"XFixes protocol extension\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: The X server does not support the "
+						"XFixes protocol extension\n");
+		return FALSE;
 	}
 
 	rc = XFixesQueryVersion(compositor.display,
@@ -2279,9 +2280,9 @@ void XLInitXData(void)
 
 	if (!rc || major < 5)
 	{
-		LogMessage(X_ERROR, "meatball: The X server does not support the "
-							"right version of the XFixes protocol extension\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: The X server does not support the "
+						"right version of the XFixes protocol extension\n");
+		return FALSE;
 	}
 
 	SelectSelectionInput(CLIPBOARD);
@@ -2309,8 +2310,12 @@ void XLInitXData(void)
 
 	if (sigaction(SIGPIPE, &act, NULL))
 	{
-		perror("sigaction");
-		abort();
+		mb_log(X_ERROR, "meatball: Failed to ignore SIGPIPE!\n");
+		return FALSE;
+	}
+	else
+	{
+		return TRUE;
 	}
 }
 

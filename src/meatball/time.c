@@ -302,14 +302,14 @@ void InitTime(void)
 
 	if (!supported)
 	{
-		LogMessage(X_ERROR, "meatball: A compatible version of the synchronization"
+		mb_log(X_ERROR, "meatball: A compatible version of the synchronization"
 							" extension was not found\n");
 		exit(1);
 	}
 
 	if (xsync_major < 3 || (xsync_major == 3 && xsync_minor < 1))
 	{
-		LogMessage(X_ERROR, "meatball: Sync fences are not supported by this X server\n");
+		mb_log(X_ERROR, "meatball: Sync fences are not supported by this X server\n");
 		exit(1);
 	}
 
@@ -321,7 +321,7 @@ void InitTime(void)
 	counter = FindSystemCounter("SERVERTIME");
 
 	if (!counter) {
-		LogMessage(X_WARNING, "meatball: Server missing required system counter SERVERTIME\n");
+		mb_log(X_WARNING, "meatball: Server missing required system counter SERVERTIME\n");
 	} else {
 		/* Now, obtain the current value of the counter.  This cannot
 	     * fail without calling the error (or IO error) handler.  */

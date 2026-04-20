@@ -500,21 +500,24 @@ void XLMoveIconSurface(IconSurface *surface, int root_x, int root_y)
 	MoveWindowTo(surface, root_x, root_y);
 }
 
-void XLInitIconSurfaces(void)
+Bool
+XLInitIconSurfaces(void)
 {
 	/* This assoc table is rather small, since the amount of icon
-	   surfaces alive at any given time is also low.  */
+	 * surfaces alive at any given time is also low. */
 	surfaces = XLCreateAssocTable(25);
+
+	return TRUE;
 }
 
 void XLReleaseIconSurface(IconSurface *icon)
 {
 	/* Unmap the surface and mark it as released, meaning it will not be
-	   mapped again in the future.  */
+	 * mapped again in the future. */
 	MaybeUnmapWindow(icon);
 	icon->state |= StateIsReleased;
 
-	/* Release the icon surface.  */
+	/* Release the icon surface. */
 	ReleaseBacking(icon);
 }
 

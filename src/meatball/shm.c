@@ -536,7 +536,7 @@ InitRender(void)
 	if (!XRenderQueryExtension(compositor.display,
 							   &base, &render_first_error))
 	{
-		LogMessage(X_ERROR, "meatball: XRender is not supported by this X server\n");
+		mb_log(X_ERROR, "meatball: XRender is not supported by this X server\n");
 		exit(1);
 	}
 
@@ -544,7 +544,7 @@ InitRender(void)
 							 &major, &minor) ||
 		(!major && minor < 2))
 	{
-		LogMessage(X_ERROR, "meatball: XRender is not supported by this X server\n");
+		mb_log(X_ERROR, "meatball: XRender is not supported by this X server\n");
 		exit(1);
 	}
 
@@ -555,22 +555,25 @@ InitRender(void)
 
 	if (!compositor.argb_format)
 	{
-		LogMessage(X_ERROR, "meatball: Failed to find standard format PictStandardARGB32\n");
+		mb_log(X_ERROR, "meatball: Failed to find standard format PictStandardARGB32\n");
 		exit(1);
 	}
 
 	if (!compositor.xrgb_format)
 	{
-		LogMessage(X_ERROR, "meatball: Failed to find standard format PictStandardRGB24\n");
+		mb_log(X_ERROR, "meatball: Failed to find standard format PictStandardRGB24\n");
 		exit(1);
 	}
 }
 
-void XLInitShm(void)
+Bool
+XLInitShm(void)
 {
 	InitRender();
 
 	global_shm = wl_global_create(compositor.wl_display,
 								  &wl_shm_interface, 1,
 								  NULL, HandleBind);
+	
+	return TRUE;
 }

@@ -1018,7 +1018,7 @@ AddAdditionalModifier(const char *name) {
 		}
 	}
 
-	LogMessage(X_WARNING, "meatball: Unknown buffer format modifier: %s\n", name);
+	mb_log(X_WARNING, "meatball: Unknown buffer format modifier: %s\n", name);
 }
 
 static void
@@ -1098,7 +1098,7 @@ InitRenderFuncs(void) {
 	                            &error_base, &event_base) ||
 	    !XPresentQueryVersion(compositor.display,
 	                          &major, &minor)) {
-		LogMessage(X_ERROR, "meatball: The X presentation extension is not supported"
+		mb_log(X_ERROR, "meatball: The X presentation extension is not supported"
 		    				" by this X server\n");
 		return False;
 	}
@@ -2863,7 +2863,7 @@ SetupMitShm(void) {
 	ext = xcb_get_extension_data(compositor.conn, &xcb_shm_id);
 
 	if (!ext || !ext->present) {
-		LogMessage(X_ERROR, "meatball: The MIT-SHM extension is not supported by this X server.\n");
+		mb_log(X_ERROR, "meatball: The MIT-SHM extension is not supported by this X server.\n");
 		exit(1);
 	}
 
@@ -2872,11 +2872,11 @@ SetupMitShm(void) {
 	                                    cookie, NULL);
 
 	if (!reply) {
-		LogMessage(X_ERROR, "meatball: The MIT-SHM extension on this X server is too old.\n");
+		mb_log(X_ERROR, "meatball: The MIT-SHM extension on this X server is too old.\n");
 		exit(1);
 	} else if (reply->major_version < 1 || (reply->major_version == 1 && reply->minor_version < 2)) {
-		LogMessage(X_ERROR, "meatball: The MIT-SHM extension on this X server is too old"
-							" to support POSIX shared memory.\n");
+		mb_log(X_ERROR, "meatball: The MIT-SHM extension on this X server is too old"
+						" to support POSIX shared memory.\n");
 		exit(1);
 	}
 
@@ -2885,14 +2885,14 @@ SetupMitShm(void) {
 	/* Now check that the mandatory image formats are supported.  */
 
 	if (!HavePixmapFormat(24, 32)) {
-		LogMessage(X_ERROR, "meatball: X server does not support pixmap format"
-							" of depth 24 with 32 bits per pixel\n");
+		mb_log(X_ERROR, "meatball: X server does not support pixmap format"
+						" of depth 24 with 32 bits per pixel\n");
 		exit(1);
 	}
 
 	if (!HavePixmapFormat(32, 32)) {
-		LogMessage(X_ERROR, "meatball: X server does not support pixmap format"
-							" of depth 32 with 32 bits per pixel\n");
+		mb_log(X_ERROR, "meatball: X server does not support pixmap format"
+						" of depth 32 with 32 bits per pixel\n");
 		exit(1);
 	}
 }
@@ -2908,8 +2908,8 @@ InitBufferFuncs(void) {
 	x_formats = XListPixmapFormats(compositor.display, &num_x_formats);
 
 	if (!x_formats) {
-		LogMessage(X_ERROR, "meatball: No pixmap formats could be retrieved from"
-							" the X server\n");
+		mb_log(X_ERROR, "meatball: No pixmap formats could be retrieved from"
+						" the X server\n");
 		return;
 	}
 
@@ -2940,8 +2940,8 @@ InitBufferFuncs(void) {
 		InitDrmFormats();
 	} else
 	error:
-		LogMessage(X_WARNING, "meatball: the X server does not support a new enough version of"
-							  " the DRI3 extension.\nHardware acceleration will not be available.\n");
+		mb_log(X_WARNING, "meatball: the X server does not support a new enough version of"
+						  " the DRI3 extension.\nHardware acceleration will not be available.\n");
 
 	if (reply)
 		free(reply);

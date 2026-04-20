@@ -313,11 +313,14 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 	wl_resource_set_implementation(resource, &manager_impl, NULL, NULL);
 }
 
-void XLInitKeyboardShortcutsInhibit(void)
+Bool
+XLInitKeyboardShortcutsInhibit(void)
 {
 	inhibit_manager_global = wl_global_create(compositor.wl_display,
 											  &zwp_keyboard_shortcuts_inhibit_manager_v1_interface,
 											  1, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLCheckShortcutInhibition(Seat *seat, Surface *surface)

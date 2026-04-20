@@ -411,7 +411,8 @@ ReadIntegerResource(const char *name, const char *class,
 	return default_value;
 }
 
-void XLInitIdleInhibit(void)
+Bool
+XLInitIdleInhibit(void)
 {
 	idle_inhibit_manager_global = wl_global_create(compositor.wl_display,
 												   &zwp_idle_inhibit_manager_v1_interface,
@@ -435,6 +436,8 @@ void XLInitIdleInhibit(void)
 
 	/* Initialize the process queue.  */
 	process_queue = MakeProcessQueue();
+
+	return TRUE;
 }
 
 void XLIdleInhibitNoticeSurfaceFocused(Surface *surface)

@@ -192,7 +192,7 @@ RunNext(ProcessQueue *queue)
 		}
 		else
 			/* Print an error and continue.  */
-			LogMessage(X_ERROR, "meatball: Subprocess creation failed: %s\n",
+			mb_log(X_ERROR, "meatball: Subprocess creation failed: %s\n",
 					   strerror(errno));
 	}
 }
