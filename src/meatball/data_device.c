@@ -1135,11 +1135,14 @@ HandleBind(struct wl_client *client, void *data,
 								   NULL, NULL);
 }
 
-void XLInitDataDevice(void)
+Bool
+XLInitDataDevice(void)
 {
 	global_data_device_manager = wl_global_create(compositor.wl_display,
 												  &wl_data_device_manager_interface,
 												  3, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLRetainDataDevice(DataDevice *device)

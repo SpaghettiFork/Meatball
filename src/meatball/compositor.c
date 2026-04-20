@@ -64,9 +64,11 @@ HandleBind(struct wl_client *client, void *data,
 								   NULL, NULL);
 }
 
-void XLInitCompositor(void)
+Bool
+XLInitCompositor(void)
 {
 	global_compositor = wl_global_create(compositor.wl_display,
 										 &wl_compositor_interface,
 										 5, NULL, HandleBind);
+	return TRUE;
 }

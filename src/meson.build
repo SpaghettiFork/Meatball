@@ -16,6 +16,7 @@ add_project_arguments('-fno-strict-aliasing', language : 'c')
 add_project_arguments('-fvisibility=hidden', language : 'c')
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 add_project_arguments('-D_DEFAULT_SOURCE', language: 'c')
+add_project_arguments('-DXCSECURITY', language: 'c')
 
 add_project_link_arguments('-fvisibility=hidden', language : 'c')
 

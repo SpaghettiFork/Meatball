@@ -183,7 +183,8 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 								   NULL, NULL);
 }
 
-void XLInitPointerGestures(void)
+Bool
+XLInitPointerGestures(void)
 {
 	if (xi2_major > 2 || xi2_minor >= 4)
 		/* Create the pointer gestures global.  */
@@ -192,4 +193,5 @@ void XLInitPointerGestures(void)
 												   3, NULL, HandleBind);
 
 	/* Pointer gestures are not supported without XI 2.4 or later.  */
+	return TRUE;
 }

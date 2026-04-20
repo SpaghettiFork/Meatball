@@ -1723,7 +1723,8 @@ void XLXdgRoleMoveBy(Role *role, int west, int north)
 	xdg_role->pending_synth_configure++;
 }
 
-void XLInitXdgSurfaces(void)
+Bool
+XLInitXdgSurfaces(void)
 {
 	XColor alloc;
 	int shape_minor, shape_major, shape_error;
@@ -1737,8 +1738,8 @@ void XLInitXdgSurfaces(void)
 	if (!XAllocColor(compositor.display, compositor.colormap,
 					 &alloc))
 	{
-		LogMessage(X_ERROR, "meatball: Failed to allocate green pixel\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: Failed to allocate green pixel\n");
+		return FALSE;
 	}
 
 	border_pixel = alloc.pixel;
@@ -1750,25 +1751,27 @@ void XLInitXdgSurfaces(void)
 	if (!XShapeQueryExtension(compositor.display, &shape_base,
 							  &shape_error))
 	{
-		LogMessage(X_ERROR, "meatball: The Nonrectangular Window Shape extension is not"
-							" present on the X server\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: The Nonrectangular Window Shape extension is not"
+						" present on the X server\n");
+		return FALSE;
 	}
 
 	if (!XShapeQueryVersion(compositor.display,
 							&shape_major, &shape_minor))
 	{
-		LogMessage(X_ERROR, "meatball: A supported version of the Nonrectangular Window"
-							" Shape extension is not present on the X server\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: A supported version of the Nonrectangular Window"
+						" Shape extension is not present on the X server\n");
+		return FALSE;
 	}
 
 	if (shape_major < 1 || (shape_major == 1 && shape_minor < 1))
 	{
-		LogMessage(X_ERROR, "meatball: The version of the Nonrectangular Window Shape"
-							" extension is too old\n");
-		exit(1);
+		mb_log(X_ERROR, "meatball: The version of the Nonrectangular Window Shape"
+						" extension is too old\n");
+		return FALSE;
 	}
+
+	return TRUE;
 }
 
 XdgRoleImplementation *

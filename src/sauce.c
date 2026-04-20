@@ -22,10 +22,22 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
 #include <xorg/xf86.h>
 #include <xorg/xf86Module.h>
 #include <xorg/xorg-server.h>
 #include <xorg/scrnintstr.h>
+#include <xorg/dix.h>
+#define XCSECURITY 1
+#include <xorg/os.h>
+#include <X11/Xauth.h>
+
+#include <fcntl.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include "meatball/meatball.h"
 
@@ -35,6 +47,8 @@
 #if defined(SP_GET_RENDER_FD)
 #define SAUCE_HAS_RENDER_FD 1
 #endif
+
+static pid_t meatball_pid = 0;
 
 static MODULESETUPPROTO(sauce_setup);
 static MODULETEARDOWNPROTO(sauce_shutdown);
@@ -59,6 +73,32 @@ _X_EXPORT XF86ModuleData sauceModuleData =
 	.setup = sauce_setup,
 	.teardown = sauce_shutdown
 };
+
+static void *
+sauce_log_forwarder(void *arg)
+{
+	int fd = *(int *)arg;
+	free(arg);
+
+	char line[512];
+	FILE *f = fdopen(fd, "r");
+	if (!f)
+		return NULL;
+
+	while (fgets(line, sizeof(line), f)) {
+		MessageType type;
+		switch (line[0]) {
+			case 'W': type = X_WARNING; break;
+			case 'E': type = X_ERROR;   break;
+			case 'D': type = X_DEBUG;   break;
+			default:  type = X_INFO;    break;
+		}
+		LogMessage(type, "%s", line + 1);
+	}
+
+	fclose(f);
+	return NULL;
+}
 
 #if 0
 static ScrnInfoPtr
@@ -85,13 +125,80 @@ GetPrimaryScreen(void)
 #endif
 
 static void
-sauce_fire(CallbackListPtr *pcbl, void *param, _X_UNUSED void *ext)
+sauce_fire(void *data, void *timeout)
 {
-	struct meatball_config* config = param;
-	meatball_initialize(config);
-
-	/* Either it worked or it didn't, stop calling us.*/
-	DeleteCallback(pcbl, sauce_fire, param);
+	struct meatball_config* config = (struct meatball_config*)data;
+ 
+	RemoveBlockAndWakeupHandlers(sauce_fire,
+                                (ServerWakeupHandlerProcPtr)NoopDDA, data);
+ 
+	int log_pipe[2];
+	if (pipe(log_pipe) != 0)
+	{
+		LogMessage(X_ERROR, "sauce: Failed to create log pipe\n");
+		free(config->auth_file);
+		free(config);
+		return;
+	}
+ 
+	config->log_pipe_write_fd = log_pipe[1];
+ 
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		LogMessage(X_ERROR, "sauce: fork() failed\n");
+		close(log_pipe[0]);
+		close(log_pipe[1]);
+		free(config->auth_file);
+		free(config);
+		return;
+	}
+ 
+	if (pid == 0)
+	{
+		pid_t inner_pid = fork();
+		if (inner_pid < 0)
+			_exit(1);
+ 
+		if (inner_pid > 0)
+		{
+			_exit(0);
+		}
+ 
+		DIR *fddir = opendir("/proc/self/fd");
+		if (fddir) {
+			int _dirfd = dirfd(fddir);
+			struct dirent *de;
+			while ((de = readdir(fddir)) != NULL) {
+				int fd = atoi(de->d_name);
+				if (fd < 3 || fd == config->log_pipe_write_fd || fd == _dirfd)
+					continue;
+				close(fd);
+			}
+			closedir(fddir);
+		}
+ 
+		setsid();
+		meatball_initialize(config);
+		_exit(0);
+	}
+ 
+	int status;
+	waitpid(pid, &status, 0);
+ 
+	/* Close the write end and start the log forwarder thread. */
+	close(log_pipe[1]);
+ 
+	int *read_fd = malloc(sizeof(int));
+	if (read_fd)
+	{
+		*read_fd = log_pipe[0];
+		pthread_t log_thread;
+		if (pthread_create(&log_thread, NULL, sauce_log_forwarder, read_fd) == 0)
+			pthread_detach(log_thread);
+		else
+			free(read_fd);
+	}
 }
 
 static void *
@@ -102,9 +209,7 @@ sauce_setup(void *module, void *opts, int *errmaj, int *errmin)
 	if (setupDone) {
 		/* Allow only one instance of Meatball for now. */
 		if (errmaj)
-		{
 			*errmaj = LDR_ONCEONLY;
-		}
 		return NULL;
 	}
 
@@ -117,31 +222,79 @@ sauce_setup(void *module, void *opts, int *errmaj, int *errmin)
 	major = GET_MODULE_MAJOR_VERSION(version);
 	minor = GET_MODULE_MINOR_VERSION(version);
 
-	if (major != SAUCE_ABI_EXPECTED_MAJOR && minor != SAUCE_ABI_EXPECTED_MINOR)
+	if (major != SAUCE_ABI_EXPECTED_MAJOR || minor != SAUCE_ABI_EXPECTED_MINOR)
 	{
 		/* ABI mismatch, likely something would break. */
 		if (errmaj)
-		{
 			*errmaj = LDR_MISMATCH;
-		}
 		return NULL;
 	}
 #else
 #warning "Sauce: ABI check unavailable, you might be in for a surprise!"
 #endif
 
+	struct meatball_config* config = calloc(1, sizeof(struct meatball_config));
+	if (!config) {
+		if (errmaj)
+			*errmaj = LDR_NOMEM;
+		return NULL;
+	}
+
+	/* Setup the display name. */
+	snprintf(config->display_name, sizeof(config->display_name), ":%s", dixGetDisplayName(NULL));
+
+	const char* cookie_type = "MIT-MAGIC-COOKIE-1";
+	uint32_t name_len = strlen(cookie_type);
+	uint32_t data_len = 0;
+
+	char *cookie = NULL;
+	if (GenerateAuthorization(name_len, cookie_type, 0,
+							  NULL, &data_len, &cookie) == -1)
+		goto bail;
+
+	char auth_path[] = "/tmp/.meatball-auth-XXXXXX";
+	FILE *af = fdopen(mkstemp(auth_path), "wb");
+	if (!af)
+		goto bail;
+		
+	const char *display_num = config->display_name + 1; /* skip ':' */
+
+	Xauth entry = {
+    	.family          = FamilyWild,
+    	.address_length  = 0,
+    	.number          = (char *)display_num,
+    	.number_length   = strlen(display_num),
+    	.name            = (char *)cookie_type,
+    	.name_length     = name_len,
+    	.data            = cookie,
+    	.data_length     = data_len,
+	};
+
+	if (!XauWriteAuth(af, &entry)) {
+		fclose(af);
+		goto bail;
+	}
+
+	fclose(af);
+	chmod(auth_path, 0644);
+
+	config->auth_file = strdup(auth_path);
+
 	setupDone = TRUE;
 
-	struct meatball_config config = { 0 };
-
 	/* Software only for now. */
-	config.meatball_flags = MB_FORCE_SOFTWARE_RENDERING;
+	config->meatball_flags = MB_FORCE_SOFTWARE_RENDERING;
 
 	/* Because of how modules are loaded in Xorg, we need
 	 * to piggyback on a callback to correctly time the 
 	 * Meatball initialization call otherwise the server
 	 * isn't ready for clients and it will fail to startup. */
-	return AddCallback(&EventCallback, sauce_fire, &config) ? module : NULL;
+	RegisterBlockAndWakeupHandlers(sauce_fire, (ServerWakeupHandlerProcPtr)NoopDDA, config);
+	return module;
+bail:
+	if (errmaj)
+		*errmaj = LDR_MODSPECIFIC;
+	return NULL;
 }
 
 static void

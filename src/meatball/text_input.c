@@ -3654,7 +3654,8 @@ InitInputStyles(void)
 	return;
 }
 
-void XLInitTextInput(void)
+Bool
+XLInitTextInput(void)
 {
 	const char *modifiers;
 	char **missing_charset_list, *def_string;
@@ -3664,9 +3665,9 @@ void XLInitTextInput(void)
 
 	if (!XSupportsLocale())
 	{
-		DebugPrint("not initializing text input because the"
-				   " locale is not supported by the X library");
-		return;
+		mb_log(X_DEBUG, "meatball: not initializing text input because the"
+					   " locale is not supported by the X library");
+		return TRUE;
 	}
 
 	/* Append the contents of XMODIFIERS to the locale modifiers
@@ -3700,7 +3701,7 @@ void XLInitTextInput(void)
 	InitInputStyles();
 
 	if (im_fontset == NULL)
-		LogMessage(X_WARNING, "meatball: Unable to load any usable fontset for input methods\n");
+		mb_log(X_WARNING, "meatball: Unable to load any usable fontset for input methods\n");
 
 	/* Register the IM callback.  */
 	XRegisterIMInstantiateCallback(compositor.display,
@@ -3711,4 +3712,6 @@ void XLInitTextInput(void)
 
 	/* Register the text input functions.  */
 	XLSeatSetTextInputFuncs(&input_funcs);
+
+	return TRUE;
 }

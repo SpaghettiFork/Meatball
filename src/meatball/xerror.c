@@ -313,7 +313,7 @@ HandleBadAlloc(XErrorEvent *event)
 		/* If there are no clients, just exit immediately.  */
 		XGetErrorText(compositor.display, event->error_code,
 					  buf, sizeof buf);
-		LogMessage(X_ERROR, "X protocol error: %s on protocol request %d\n",
+		mb_log(X_ERROR, "X protocol error: %s on protocol request %d\n",
 				   buf, event->request_code);
 		exit(70);
 	}
@@ -404,7 +404,7 @@ ErrorHandler(Display *display, XErrorEvent *event)
 	}
 
 	XGetErrorText(display, event->error_code, buf, sizeof buf);
-	LogMessage(X_ERROR, "X protocol error: %s on protocol request %d\n",
+	mb_log(X_ERROR, "X protocol error: %s on protocol request %d\n",
 			   buf, event->request_code);
 	exit(70);
 }

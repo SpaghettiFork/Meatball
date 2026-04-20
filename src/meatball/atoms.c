@@ -265,7 +265,7 @@ void XLInitAtoms(void)
 					  ArrayElements(names), False,
 					  atoms))
 	{
-		LogMessage(X_ERROR, "meatball: Failed to intern X atoms\n");
+		mb_log(X_ERROR, "meatball: Failed to intern X atoms\n");
 		exit(1);
 	}
 

@@ -382,13 +382,13 @@ void SetRenderer(struct meatball_config* config)
 	if (config->render_fd)
 	{
 		renderer_ptr = (Renderer*) GetRenderer(RENDERER_EGL);
-		LogMessage(X_INFO, "meatball: Using EGL renderer.");
+		mb_log(X_INFO, "meatball: Using EGL renderer.\n");
 	}
 	else
 #endif
 	{
 		renderer_ptr = (Renderer*) GetRenderer(RENDERER_PICTURE);
-		LogMessage(X_INFO, "meatball: Using software renderer.");
+		mb_log(X_INFO, "meatball: Using software renderer.\n");
 	}
 
 	InstallRenderer(renderer_ptr);

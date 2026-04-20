@@ -764,11 +764,14 @@ void XLClearForeignPrimary(Timestamp time)
 	foreign_selection_time = time;
 }
 
-void XLInitPrimarySelection(void)
+Bool
+XLInitPrimarySelection(void)
 {
 	global_primary_selection_device_manager = wl_global_create(compositor.wl_display,
 															   &zwp_primary_selection_device_manager_v1_interface,
 															   1, NULL, HandleBind);
 	all_devices.next = &all_devices;
 	all_devices.last = &all_devices;
+
+	return TRUE;
 }

@@ -1110,11 +1110,14 @@ HandleBind(struct wl_client *client, void *data,
 								   NULL, NULL);
 }
 
-void XLInitSubsurfaces(void)
+Bool
+XLInitSubsurfaces(void)
 {
 	global_subcompositor = wl_global_create(compositor.wl_display,
 											&wl_subcompositor_interface,
 											1, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLSubsurfaceParentDestroyed(Role *role)

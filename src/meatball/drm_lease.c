@@ -771,7 +771,7 @@ AddConnectorRef(DrmLeaseConnector *connector,
 
 	if (!connector_ref->resource)
 	{
-		LogMessage(X_ERROR, "meatball: failed to allocate output ref\n");
+		mb_log(X_ERROR, "meatball: failed to allocate output ref\n");
 		abort();
 	}
 
@@ -1626,7 +1626,8 @@ HandleOutputOrResourceChange(Time timestamp)
 	CollectDeadResources();
 }
 
-void XLInitDrmLease(void)
+Bool
+XLInitDrmLease(void)
 {
 	xcb_randr_query_version_reply_t *reply;
 	xcb_randr_query_version_cookie_t cookie;
@@ -1640,19 +1641,19 @@ void XLInitDrmLease(void)
 
 	if (!ext || !ext->present)
 		/* DRM leasing will not be supported.  */
-		return;
+		goto exit;
 
 	cookie = xcb_randr_query_version(compositor.conn, 1, 6);
 	reply = xcb_randr_query_version_reply(compositor.conn,
 										  cookie, NULL);
 
 	if (!reply)
-		return;
+		goto exit;
 
 	if (reply->major_version < 1 || (reply->major_version == 1 && reply->minor_version < 6))
 	{
 		free(reply);
-		return;
+		goto exit;
 	}
 
 	/* Free the reply.  */
@@ -1672,4 +1673,7 @@ void XLInitDrmLease(void)
 
 	/* Add a hook that runs upon notification.  */
 	XLOutputSetChangeFunction(HandleOutputOrResourceChange);
+
+exit:
+	return TRUE;
 }

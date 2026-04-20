@@ -1957,9 +1957,12 @@ void XLPointerConstraintsReconfineSurface(Surface *surface)
 	Reconfine(surface, &root_x, &root_y, False);
 }
 
-void XLInitPointerConstraints(void)
+Bool
+XLInitPointerConstraints(void)
 {
 	pointer_constraints_global = wl_global_create(compositor.wl_display,
 												  &zwp_pointer_constraints_v1_interface,
 												  1, NULL, HandleBind);
+
+	return TRUE;
 }

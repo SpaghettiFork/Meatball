@@ -676,15 +676,19 @@ HandleBind(struct wl_client *client, void *data, uint32_t version,
 	test_manager_send_display_string(resource, name);
 }
 
-void
-XLInitTest(void) {
-	test_manager_global
-			= wl_global_create(compositor.wl_display, &test_manager_interface,
-			                   1, NULL, HandleBind);
+Bool
+XLInitTest(void)
+{
+	test_manager_global = wl_global_create(compositor.wl_display,
+										   &test_manager_interface,
+			                 			   1, NULL, HandleBind);
+
+	return TRUE;
 }
 
 static Bool
-DispatchMapNotify(XEvent *event) {
+DispatchMapNotify(XEvent *event)
+{
 	TestSurface *test;
 
 	/* Try to look up the surface.  */

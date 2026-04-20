@@ -1546,10 +1546,12 @@ void XLCreateSurface(struct wl_client *client,
 	surface->acquire_fence = -1;
 }
 
-void XLInitSurfaces(void)
+Bool
+XLInitSurfaces(void)
 {
 	all_surfaces.next = &all_surfaces;
 	all_surfaces.last = &all_surfaces;
+	return TRUE;
 }
 
 /* Role management: XDG shells, wl_shells, et cetera.  */

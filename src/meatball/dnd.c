@@ -703,7 +703,7 @@ HandleDndEntry(Surface *target, Window source, Atom *targets,
 
 	if (dnd_state.source_window)
 	{
-		LogMessage(X_ERROR, "meatball: XdndEnter received while a drag-and-drop operation"
+		mb_log(X_ERROR, "meatball: XdndEnter received while a drag-and-drop operation"
 							" is in progress; overriding current drag-and-drop operation\n");
 		FinishDndEntry();
 	}
@@ -1465,7 +1465,7 @@ MakeRootWindowEntry(WindowCache *cache)
 	if (!geometry || !tree)
 	{
 		/* This should not happen in principle.  */
-		LogMessage(X_ERROR, "meatball: failed to obtain window geometry or tree"
+		mb_log(X_ERROR, "meatball: failed to obtain window geometry or tree"
 							" of root window\n");
 		abort();
 	}

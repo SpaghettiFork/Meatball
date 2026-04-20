@@ -152,11 +152,14 @@ HandleBind(struct wl_client *client, void *data,
 	wm_base->list.last = &wm_base->list;
 }
 
-void XLInitXdgWM(void)
+Bool
+XLInitXdgWM(void)
 {
 	global_xdg_wm_base = wl_global_create(compositor.wl_display,
 										  &xdg_wm_base_interface,
 										  5, NULL, HandleBind);
+
+	return TRUE;
 }
 
 void XLXdgWmBaseSendPing(XdgWmBase *wm_base)

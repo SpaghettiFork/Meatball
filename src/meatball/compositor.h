@@ -45,16 +45,19 @@
 #include <xcb/xproto.h>
 #include <xcb/shm.h>
 
-#include <xorg/log.h>
 #include <wayland-server.h>
 
 #include <pixman.h>
 
 #include "meatball.h"
+#include "meatball_log.h"
 #include "transfer_atoms.h"
 
 #define RENDERER_EGL		"egl"
 #define RENDERER_PICTURE	"picture"
+
+#define TRUE				1
+#define FALSE				0
 
 typedef struct _Compositor Compositor;
 
@@ -791,7 +794,7 @@ extern Bool XLAddFdFlag(int, int, Bool);
 
 /* Defined in compositor.c.  */
 
-extern void XLInitCompositor(void);
+extern Bool XLInitCompositor(void);
 
 /* Defined in region.c.  */
 
@@ -858,7 +861,7 @@ extern void ExtBufferDestroy(ExtBuffer *);
 
 extern int render_first_error;
 
-extern void XLInitShm(void);
+extern Bool XLInitShm(void);
 
 /* Defined in subcompositor.c.  */
 
@@ -1323,7 +1326,7 @@ extern void XLCreateSurface(struct wl_client *,
 
 extern void XLCommitSurface(Surface *, Bool);
 
-extern void XLInitSurfaces(void);
+extern Bool XLInitSurfaces(void);
 
 extern Bool XLSurfaceAttachRole(Surface *, Role *);
 
@@ -1392,7 +1395,7 @@ extern void TruncateScaleToSurface(Surface *, int, int, int *, int *);
 
 extern int global_scale_factor;
 
-extern void XLInitRROutputs(void);
+extern Bool XLInitRROutputs(void);
 
 extern Bool XLHandleOneXEventForOutputs(XEvent *);
 
@@ -1468,7 +1471,7 @@ struct _XdgWmBase {
 	XdgRoleList list;
 };
 
-extern void XLInitXdgWM(void);
+extern Bool XLInitXdgWM(void);
 
 extern void XLXdgWmBaseSendPing(XdgWmBase *);
 
@@ -1513,7 +1516,7 @@ extern void XLStartCursorClock(void);
 
 extern void XLStopCursorClock(void);
 
-extern void XLInitFrameClock(void);
+extern Bool XLInitFrameClock(void);
 
 /* Defined in xdg_surface.c.  */
 
@@ -1570,7 +1573,7 @@ extern int shape_base;
 
 extern Bool XLHandleXEventForXdgSurfaces(XEvent *);
 
-extern void XLInitXdgSurfaces(void);
+extern Bool XLInitXdgSurfaces(void);
 
 extern void XLGetXdgSurface(struct wl_client *, struct wl_resource *,
                             uint32_t, struct wl_resource *);
@@ -1673,7 +1676,7 @@ extern Bool XLHandleXEventForXdgToplevels(XEvent *);
 
 extern Bool XLIsXdgToplevel(Window);
 
-extern void XLInitXdgToplevels(void);
+extern Bool XLInitXdgToplevels(void);
 
 extern void XLXdgToplevelGetDecoration(XdgRoleImplementation *,
                                        struct wl_resource *, uint32_t);
@@ -1686,7 +1689,7 @@ extern void XLGetXdgPopup(struct wl_client *, struct wl_resource *,
 
 extern Bool XLHandleXEventForXdgPopups(XEvent *);
 
-extern void XLInitPopups(void);
+extern Bool XLInitPopups(void);
 
 /* Defined in xerror.c.  */
 
@@ -1765,7 +1768,7 @@ extern void XLSubsurfaceParentDestroyed(Role *);
 
 extern void XLSubsurfaceHandleParentCommit(Surface *);
 
-extern void XLInitSubsurfaces(void);
+extern Bool XLInitSubsurfaces(void);
 
 extern void XLUpdateOutputsForChildren(Surface *, int, int);
 
@@ -1799,7 +1802,7 @@ struct _DndOfferFuncs {
 	void (*send_offers)(struct wl_resource *);
 };
 
-extern void XLInitDataDevice(void);
+extern Bool XLInitDataDevice(void);
 
 extern void XLRetainDataDevice(DataDevice *);
 
@@ -1869,7 +1872,7 @@ struct _TextInputFuncs {
 
 extern void XLTextInputDispatchCoreEvent(Surface *, XEvent *);
 
-extern void XLInitTextInput(void);
+extern Bool XLInitTextInput(void);
 
 /* Defined in seat.c.  */
 
@@ -1890,7 +1893,7 @@ extern void XLDispatchGEForSeats(XEvent *, Surface *,
 
 extern void XLSelectStandardEvents(Window);
 
-extern void XLInitSeats(void);
+extern Bool XLInitSeats(void);
 
 extern Bool XLResizeToplevel(Seat *, Surface *, uint32_t, uint32_t);
 
@@ -1978,7 +1981,7 @@ extern Cursor InitDefaultCursor(void);
 
 /* Defined in dmabuf.c.  */
 
-extern void XLInitDmabuf(void);
+extern Bool XLInitDmabuf(void);
 
 /* Defined in select.c.  */
 
@@ -2049,11 +2052,11 @@ extern Bool XLOwnDragSelection(Time, DataSource *);
 
 extern void XLNotePrimaryDestroyed(PDataSource *);
 
-extern void XLInitXData(void);
+extern Bool XLInitXData(void);
 
 /* Defined in xsettings.c.  */
 
-extern void XLInitXSettings(void);
+extern Bool XLInitXSettings(void);
 
 extern Bool XLHandleOneXEventForXSettings(XEvent *);
 
@@ -2085,7 +2088,7 @@ extern Bool XLHandleOneXEventForIconSurfaces(XEvent *);
 
 extern void XLMoveIconSurface(IconSurface *, int, int);
 
-extern void XLInitIconSurfaces(void);
+extern Bool XLInitIconSurfaces(void);
 
 extern void XLReleaseIconSurface(IconSurface *);
 
@@ -2093,7 +2096,7 @@ extern Bool XLIsWindowIconSurface(Window);
 
 /* Defined in primary_selection.c.  */
 
-extern void XLInitPrimarySelection(void);
+extern Bool XLInitPrimarySelection(void);
 
 extern void XLSetForeignPrimary(Timestamp, CreateOfferFuncs);
 
@@ -2140,7 +2143,7 @@ extern void XLSyncRelease(SyncRelease *);
 
 extern void XLWaitFence(Surface *);
 
-extern void XLInitExplicitSynchronization(void);
+extern Bool XLInitExplicitSynchronization(void);
 
 /* Defined in transform.c.  */
 
@@ -2170,7 +2173,7 @@ extern BufferTransform InvertTransform(BufferTransform);
 
 /* Defined in wp_viewporter.c.  */
 
-extern void XLInitWpViewporter(void);
+extern Bool XLInitWpViewporter(void);
 
 extern void XLWpViewportReportBadSize(ViewportExt *);
 
@@ -2178,19 +2181,19 @@ extern void XLWpViewportReportOutOfBuffer(ViewportExt *);
 
 /* Defined in decoration.c.  */
 
-extern void XLInitDecoration(void);
+extern Bool XLInitDecoration(void);
 
 /* Defined in single_pixel_buffer.c.  */
 
-extern void XLInitSinglePixelBuffer(void);
+extern Bool XLInitSinglePixelBuffer(void);
 
 /* Defined in drm_lease.c.  */
 
-extern void XLInitDrmLease(void);
+extern Bool XLInitDrmLease(void);
 
 /* Defined in pointer_constraints.c.  */
 
-extern void XLInitPointerConstraints(void);
+extern Bool XLInitPointerConstraints(void);
 
 extern void XLPointerBarrierCheck(Seat *, Surface *, double, double,
                                   double, double);
@@ -2205,14 +2208,14 @@ extern void XLPointerConstraintsReconfineSurface(Surface *);
 
 /* Defined in relative_pointer.c.  */
 
-extern void XLInitRelativePointer(void);
+extern Bool XLInitRelativePointer(void);
 
 extern void XLRelativePointerSendRelativeMotion(struct wl_resource *,
                                                 uint64_t, double, double);
 
 /* Defined in keyboard_shortcuts_inhibit.c.  */
 
-extern void XLInitKeyboardShortcutsInhibit(void);
+extern Bool XLInitKeyboardShortcutsInhibit(void);
 
 extern void XLCheckShortcutInhibition(Seat *, Surface *);
 
@@ -2220,7 +2223,7 @@ extern void XLReleaseShortcutInhibition(Seat *, Surface *);
 
 /* Defined in idle_inhibit.c.  */
 
-extern void XLInitIdleInhibit(void);
+extern Bool XLInitIdleInhibit(void);
 
 extern void XLIdleInhibitNoticeSurfaceFocused(Surface *);
 
@@ -2258,13 +2261,13 @@ extern XSyncFence FenceToXFence(Fence *);
 
 /* Defined in pointer_gestures.c.  */
 
-extern void XLInitPointerGestures(void);
+extern Bool XLInitPointerGestures(void);
 
 /* Defined in test.c.  */
 
 extern int locked_output_scale;
 
-extern void XLInitTest(void);
+extern Bool XLInitTest(void);
 
 extern Bool XLHandleOneXEventForTest(XEvent *);
 
@@ -2291,15 +2294,15 @@ extern void XLGetTestSeat(struct wl_client *, struct wl_resource *,
 
 /* Defined in xdg_activation.c.  */
 
-extern void XLInitXdgActivation(void);
+extern Bool XLInitXdgActivation(void);
 
 /* Defined in tearing_control.c.  */
 
-extern void XLInitTearingControl(void);
+extern Bool XLInitTearingControl(void);
 
 /* Defined in xdg_system_bell.c */
 
-extern void XLInitSystemBell(void);
+extern Bool XLInitSystemBell(void);
 
 /* Defined in sync_source.h.  */
 

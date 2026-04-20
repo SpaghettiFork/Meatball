@@ -199,9 +199,12 @@ HandleBind(struct wl_client *client, void *data,
 								   NULL, NULL);
 }
 
-void XLInitTearingControl(void)
+Bool
+XLInitTearingControl(void)
 {
 	tearing_control_manager_global = wl_global_create(compositor.wl_display,
 													  &wp_tearing_control_manager_v1_interface,
 													  1, NULL, HandleBind);
+
+	return TRUE;
 }

@@ -374,7 +374,8 @@ void XLListenToIntegerSetting(const char *name, void (*callback)(int))
 	integer_listeners = listener;
 }
 
-void XLInitXSettings(void)
+Bool
+XLInitXSettings(void)
 {
 	IntegerValueListener *listener;
 	char buffer[64];
@@ -382,7 +383,7 @@ void XLInitXSettings(void)
 	if (xsettings_atom == None)
 	{
 		/* Intern the manager selection atom, if it doesn't already
-	   exist.  */
+	     * exist. */
 		sprintf(buffer, "_XSETTINGS_S%d",
 				DefaultScreen(compositor.display));
 		xsettings_atom = XInternAtom(compositor.display, buffer,
@@ -419,4 +420,6 @@ void XLInitXSettings(void)
 
 	/* Finally, ungrab the X server.  */
 	XUngrabServer(compositor.display);
+
+	return TRUE;
 }
