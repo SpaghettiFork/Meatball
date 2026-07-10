@@ -61,3 +61,11 @@ dkms.conf
 # Meson...
 src/build
 src/builddir
+
+# AI slop?
+opencode.json
+mimocode.json
+.mimocode/
+.opencode/
+.claude/
+.codex-review-*
