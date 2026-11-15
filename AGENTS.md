@@ -4,6 +4,9 @@ A Wayland implementation inside Spaghetti, based upon 12to11.
 
 ## Supported platforms.
 
+The native host currently targets Linux and uses `/proc/self/fd` when setting
+socket permissions.
+
 Meatball uses Xorg Render and Present. Rendering acceleration follows the
 capabilities of the server's video DDX. Dmabuf buffers require DRI3 import
 support from that DDX.
@@ -49,6 +52,8 @@ timers, pipe reads, hangups, and source removal inside the server loop.
 `native-clients` checks credentials, native resource ownership, X11
 `KillClient`, deferred replies and events, FD transfer and cleanup, exceptional
 clients, and lifetime identifiers across disconnects and resets.
+`native-socket` replaces the socket pathname during permission setup and checks
+that ownership and mode changes apply to the original socket inode.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.
