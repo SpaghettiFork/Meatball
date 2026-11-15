@@ -33,6 +33,11 @@ if not cc.compiles('''
     #include <external.h>
     #include <present.h>
     #include <shmint.h>
+    typedef PixmapPtr (*ShmImport)(ScreenPtr, int, CARD16, CARD16,
+                                   CARD8, CARD8, CARD32, CARD32);
+    _Static_assert(__builtin_types_compatible_p(
+                       __typeof__(&shm_create_pixmap_from_fd), ShmImport),
+                   "Spaghetti SHM import requires a 32-bit stride");
     int main(void) {
         ExternalClientCallbacks callbacks = {0};
         return sizeof(callbacks) == 0;

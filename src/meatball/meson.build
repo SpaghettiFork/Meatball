@@ -5,6 +5,8 @@ srcs_meatball = [
     'native_client.c',
     'native_window.c',
     'native_surface.c',
+    'native_shm.c',
+    'native_render.c',
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')
