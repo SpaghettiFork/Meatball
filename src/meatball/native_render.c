@@ -14,15 +14,19 @@ mb_surface_redraw (MbSurface *surface)
     PicturePtr source = NULL, destination = NULL;
     PictFormatPtr source_format, destination_format;
     CARD32 format;
-    PictTransform transform = {
-        .matrix = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, pixman_fixed_1 } }
+    pixman_f_transform_t sampling = {
+        .m = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 1 } }
     };
-    xFixed scale, width, height;
+    PictTransform transform;
+    double x = 0, y = 0, width, height, scale_x, scale_y;
+    Bool rotated = surface->transform == WL_OUTPUT_TRANSFORM_90 ||
+                   surface->transform == WL_OUTPUT_TRANSFORM_270 ||
+                   surface->transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 ||
+                   surface->transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
     int error;
 
     if (!window || !window->realized || !surface->pixels)
         return TRUE;
-    scale = pixman_int_to_fixed (surface->scale);
     if (dixLookupResourceByType ((void **)&pixels, surface->pixels, RT_PIXMAP,
                                  surface->client->native,
                                  DixReadAccess) != Success)
@@ -39,52 +43,76 @@ mb_surface_redraw (MbSurface *surface)
                             surface->client->native, &error);
     if (!source)
         return FALSE;
-    width = pixman_int_to_fixed (pixels->drawable.width);
-    height = pixman_int_to_fixed (pixels->drawable.height);
+    width = pixels->drawable.width;
+    height = pixels->drawable.height;
+    if (surface->crop.source_set)
+    {
+        x = wl_fixed_to_double (surface->crop.x) * surface->scale;
+        y = wl_fixed_to_double (surface->crop.y) * surface->scale;
+        scale_x = wl_fixed_to_double (surface->crop.width) * surface->scale /
+                  surface->width;
+        scale_y = wl_fixed_to_double (surface->crop.height) * surface->scale /
+                  surface->height;
+    }
+    else
+    {
+        scale_x = (rotated ? height : width) / surface->width;
+        scale_y = (rotated ? width : height) / surface->height;
+    }
+    /* Render maps destination coordinates back into the buffer. */
     switch (surface->transform)
     {
     case WL_OUTPUT_TRANSFORM_NORMAL:
-        transform.matrix[0][0] = scale;
-        transform.matrix[1][1] = scale;
+        sampling.m[0][0] = scale_x;
+        sampling.m[0][2] = x;
+        sampling.m[1][1] = scale_y;
+        sampling.m[1][2] = y;
         break;
     case WL_OUTPUT_TRANSFORM_90:
-        transform.matrix[0][1] = scale;
-        transform.matrix[1][0] = -scale;
-        transform.matrix[1][2] = height;
+        sampling.m[0][1] = scale_y;
+        sampling.m[0][2] = y;
+        sampling.m[1][0] = -scale_x;
+        sampling.m[1][2] = height - x;
         break;
     case WL_OUTPUT_TRANSFORM_180:
-        transform.matrix[0][0] = -scale;
-        transform.matrix[0][2] = width;
-        transform.matrix[1][1] = -scale;
-        transform.matrix[1][2] = height;
+        sampling.m[0][0] = -scale_x;
+        sampling.m[0][2] = width - x;
+        sampling.m[1][1] = -scale_y;
+        sampling.m[1][2] = height - y;
         break;
     case WL_OUTPUT_TRANSFORM_270:
-        transform.matrix[0][1] = -scale;
-        transform.matrix[0][2] = width;
-        transform.matrix[1][0] = scale;
+        sampling.m[0][1] = -scale_y;
+        sampling.m[0][2] = width - y;
+        sampling.m[1][0] = scale_x;
+        sampling.m[1][2] = x;
         break;
     case WL_OUTPUT_TRANSFORM_FLIPPED:
-        transform.matrix[0][0] = -scale;
-        transform.matrix[0][2] = width;
-        transform.matrix[1][1] = scale;
+        sampling.m[0][0] = -scale_x;
+        sampling.m[0][2] = width - x;
+        sampling.m[1][1] = scale_y;
+        sampling.m[1][2] = y;
         break;
     case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-        transform.matrix[0][1] = scale;
-        transform.matrix[1][0] = scale;
+        sampling.m[0][1] = scale_y;
+        sampling.m[0][2] = y;
+        sampling.m[1][0] = scale_x;
+        sampling.m[1][2] = x;
         break;
     case WL_OUTPUT_TRANSFORM_FLIPPED_180:
-        transform.matrix[0][0] = scale;
-        transform.matrix[1][1] = -scale;
-        transform.matrix[1][2] = height;
+        sampling.m[0][0] = scale_x;
+        sampling.m[0][2] = x;
+        sampling.m[1][1] = -scale_y;
+        sampling.m[1][2] = height - y;
         break;
     case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-        transform.matrix[0][1] = -scale;
-        transform.matrix[0][2] = width;
-        transform.matrix[1][0] = -scale;
-        transform.matrix[1][2] = height;
+        sampling.m[0][1] = -scale_y;
+        sampling.m[0][2] = width - y;
+        sampling.m[1][0] = -scale_x;
+        sampling.m[1][2] = height - x;
         break;
     }
-    if (SetPictureTransform (source, &transform) != Success)
+    if (!pixman_transform_from_pixman_f_transform (&transform, &sampling) ||
+        SetPictureTransform (source, &transform) != Success)
     {
         FreePicture (source, None);
         return FALSE;

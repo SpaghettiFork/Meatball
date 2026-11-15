@@ -9,6 +9,7 @@
 #include "native_client.h"
 #include "native_shm.h"
 #include "native_surface.h"
+#include "native_viewport.h"
 #include "native_window.h"
 #include "native_xdg.h"
 #include <dixstruct.h>
@@ -25,6 +26,7 @@ typedef struct
     struct wl_global *xdg_global;
     struct wl_global *shm_global;
     struct wl_global *surface_global;
+    struct wl_global *viewport_global;
     struct wl_list surfaces;
     struct wl_list clients;
     struct wl_listener client_created;

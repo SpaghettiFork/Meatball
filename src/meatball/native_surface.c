@@ -138,6 +138,7 @@ surface_destroyed (struct wl_resource *resource)
     struct Frame *frame, *next;
 
     mb_xdg_surface_destroyed (surface);
+    mb_viewport_surface_destroyed (surface);
     if (surface->frame_timer)
         wl_event_source_remove (surface->frame_timer);
     if (surface->pending_buffer)
@@ -358,14 +359,15 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
                 "buffer dimensions must be multiples of scale");
             return;
         }
-        width = (rotated ? buffer->height : buffer->width) /
-                surface->pending_scale;
-        height = (rotated ? buffer->width : buffer->height) /
-                 surface->pending_scale;
+        width = rotated ? buffer->height : buffer->width;
+        height = rotated ? buffer->width : buffer->height;
     }
 
-    if (!native || !mb_xdg_commit (surface))
+    if (!native ||
+        !mb_viewport_size (surface, width, height, &width, &height) ||
+        !mb_xdg_commit (surface))
         return;
+    surface->crop = surface->pending_crop;
     surface->scale = surface->pending_scale;
     surface->transform = surface->pending_transform;
     if (surface->input_changed)
