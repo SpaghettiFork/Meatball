@@ -69,7 +69,11 @@ class Wayland:
 
     def roundtrip_events(self):
         callback = self.allocate_id()
-        self.send(WAYLAND_DISPLAY_ID, DISPLAY_SYNC, struct.pack("=I", callback))
+        try:
+            self.send(WAYLAND_DISPLAY_ID, DISPLAY_SYNC, struct.pack("=I", callback))
+        except (BrokenPipeError, ConnectionResetError):
+            # A fatal protocol error may close the peer before the sync is sent.
+            pass
         events = []
         while True:
             event = self.receive()
