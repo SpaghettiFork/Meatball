@@ -17,8 +17,8 @@
  */
 #include <string.h>
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "compositor.h"
 
@@ -28,48 +28,47 @@
 static struct wl_global *xdg_system_bell_global;
 
 static void
-Ring(struct wl_client *client, struct wl_resource *resource, struct wl_resource *surface)
+Ring (struct wl_client *client, struct wl_resource *resource,
+      struct wl_resource *surface)
 {
-	XBell(compositor.display, 100);
+    XBell (compositor.display, 100);
 }
 
 static void
-Destroy(struct wl_client *client, struct wl_resource *resource)
+Destroy (struct wl_client *client, struct wl_resource *resource)
 {
-	wl_resource_destroy(resource);
+    wl_resource_destroy (resource);
 }
 
-static const struct xdg_system_bell_v1_interface xdg_system_bell_impl =
-{
-	.destroy = Destroy,
-	.ring = Ring
+static const struct xdg_system_bell_v1_interface xdg_system_bell_impl = {
+    .destroy = Destroy, .ring = Ring
 };
 
 static void
-HandleBind(struct wl_client *client, void *data, uint32_t version,
-		   uint32_t id)
+HandleBind (struct wl_client *client, void *data, uint32_t version,
+            uint32_t id)
 {
-	struct wl_resource *resource;
+    struct wl_resource *resource;
 
-	resource = wl_resource_create(client,
-								  &xdg_system_bell_v1_interface,
-								  version, id);
+    resource = wl_resource_create (client, &xdg_system_bell_v1_interface,
+                                   version, id);
 
-	if (!resource)
-	{
-		wl_client_post_no_memory(client);
-		return;
-	}
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
 
-	wl_resource_set_implementation(resource, &xdg_system_bell_impl, NULL, NULL);
+    wl_resource_set_implementation (resource, &xdg_system_bell_impl, NULL,
+                                    NULL);
 }
 
 Bool
-XLInitSystemBell(void)
+XLInitSystemBell (void)
 {
-	xdg_system_bell_global = wl_global_create(compositor.wl_display,
-											  &xdg_system_bell_v1_interface,
-											  1, NULL, HandleBind);
+    xdg_system_bell_global =
+        wl_global_create (compositor.wl_display, &xdg_system_bell_v1_interface,
+                          1, NULL, HandleBind);
 
-	return TRUE;
+    return TRUE;
 }

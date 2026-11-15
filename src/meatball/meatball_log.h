@@ -21,31 +21,28 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-typedef enum {
-    X_PROBED,                   /* Value was probed */
-    X_CONFIG,                   /* Value was given in the config file */
-    X_DEFAULT,                  /* Value is a default */
-    X_CMDLINE,                  /* Value was given on the command line */
-    X_NOTICE,                   /* Notice */
-    X_ERROR,                    /* Error message */
-    X_WARNING,                  /* Warning message */
-    X_INFO,                     /* Informational message */
-    X_NONE,                     /* No prefix */
-    X_NOT_IMPLEMENTED,          /* Not implemented */
-    X_DEBUG,                    /* Debug message */
-    X_UNKNOWN = -1              /* unknown -- this must always be last */
+typedef enum
+{
+    X_PROBED,          /* Value was probed */
+    X_CONFIG,          /* Value was given in the config file */
+    X_DEFAULT,         /* Value is a default */
+    X_CMDLINE,         /* Value was given on the command line */
+    X_NOTICE,          /* Notice */
+    X_ERROR,           /* Error message */
+    X_WARNING,         /* Warning message */
+    X_INFO,            /* Informational message */
+    X_NONE,            /* No prefix */
+    X_NOT_IMPLEMENTED, /* Not implemented */
+    X_DEBUG,           /* Debug message */
+    X_UNKNOWN = -1     /* unknown -- this must always be last */
 } MessageType;
 
-void
-mb_log(MessageType type, const char *format, ...);
+void mb_log (MessageType type, const char *format, ...);
 
-extern void
-mb_flush(void);
+extern void mb_flush (void);
 
-extern void
-mb_crash_handler(int);
+extern void mb_crash_handler (int);
 
-void
-SetLoggerFile(FILE* file);
+void SetLoggerFile (FILE *file);
 
 #endif // _MEATBALL_LOG_H_

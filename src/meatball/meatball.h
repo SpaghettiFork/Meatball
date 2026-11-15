@@ -1,17 +1,17 @@
 /**
  * Spaghetti Display Server
  * Copyright (C) 2025  SpaghettiFork
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -24,67 +24,68 @@ typedef int _MEATBALL_BOOL;
 
 enum MEATBALL_BOOL
 {
-	MEATBALL_FALSE = 0,
-	MEATBALL_TRUE  = 1
+    MEATBALL_FALSE = 0,
+    MEATBALL_TRUE = 1
 };
 
 enum meatball_flags
 {
-	MB_NONE									= 0,
-	/* Force disable the EGL renderer, which forces
-	 * Meatball to use Xorg's 2D acceleration instead. */
-	MB_FORCE_SOFTWARE_RENDERING				= 0x2,
-	/* Expose all possible formats for SHM.
-	 * 
-	 * Software renderer only. */
-	MB_PICTURE_EXPOSE_ALL_SHM_FORMATS		= 0x4,
-	/* Request a high-priority rendering context.
-	 * EGL renderer only. */
-	MB_EGL_HIGH_PRIORITY_CONTEXT			= 0x8
+    MB_NONE = 0,
+    /* Force disable the EGL renderer, which forces
+     * Meatball to use Xorg's 2D acceleration instead. */
+    MB_FORCE_SOFTWARE_RENDERING = 0x2,
+    /* Expose all possible formats for SHM.
+     *
+     * Software renderer only. */
+    MB_PICTURE_EXPOSE_ALL_SHM_FORMATS = 0x4,
+    /* Request a high-priority rendering context.
+     * EGL renderer only. */
+    MB_EGL_HIGH_PRIORITY_CONTEXT = 0x8
 };
 
 struct meatball_config
 {
-	char						display_name[8];
+    char display_name[8];
 
-	char						*auth_file;
+    char *auth_file;
 
-	int 						log_pipe_write_fd;
+    int log_pipe_write_fd;
 
-	/**
-	 * File descriptor for the GPU used by the DDX.
-	 * 
-	 * Will be used to target the correct device.
-	 */
-	int 						render_fd;
-	/**
-	 * Meatball flags to modify behaviour.
-	 *
-	 * See `meatball_flags` for accepted values.
-	 */
-	unsigned long				meatball_flags;
+    /**
+     * File descriptor for the GPU used by the DDX.
+     *
+     * Will be used to target the correct device.
+     */
+    int render_fd;
+    /**
+     * Meatball flags to modify behaviour.
+     *
+     * See `meatball_flags` for accepted values.
+     */
+    unsigned long meatball_flags;
 };
 
 /**
  * Returns the version of Meatball present, encoded
  * in Xorg's version format.
- * 
+ *
  * Used to check the ABI version in Sauce.
  *
  * Will decode into MAJOR.MINOR.PATCHLEVEL
  */
-extern _X_EXPORT void meatball_version(unsigned long *version);
+extern _X_EXPORT void meatball_version (unsigned long *version);
 
 /**
  * Initializes the Meatball compatibility layer.
- * 
+ *
  * Requires a valid, non-NULL `meatball_config` struct.
  */
-extern _X_EXPORT _MEATBALL_BOOL meatball_initialize(struct meatball_config* config);
+extern _X_EXPORT _MEATBALL_BOOL
+meatball_initialize (struct meatball_config *config);
 
 /**
  * Shuts down the running Meatball instance if possible.
  */
-extern _X_EXPORT void meatball_shutdown(void);
+extern _X_EXPORT void meatball_shutdown (void);
 
 #endif /* _MEATBALL_H */
