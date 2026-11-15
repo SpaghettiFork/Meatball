@@ -58,10 +58,6 @@ srcs_meatball = [
     'picture_renderer.c',
 ]
 
-if egl_renderer
-    srcs_meatball += 'egl_renderer.c'
-endif
-
 # We need the headers in order to actually get a build.
 subdir('test')
 subdir('wayland-proto')

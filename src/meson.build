@@ -7,7 +7,6 @@ project('Meatball', 'c',
         meson_version: '>= 0.58.0',
 )
 
-egl_renderer = get_option('egl_renderer')
 module_dir = join_paths(get_option('libdir'), get_option('module_dir'))
 
 cc = meson.get_compiler('c')
@@ -119,7 +118,6 @@ xshmfence_dep = dependency('xshmfence', required : true)
 
 pixman_dep = dependency('pixman-1')
 libdrm_dep = dependency('libdrm', version: libdrm_req, required: true)
-epoxy_dep = dependency('epoxy', required: true)
 
 wayland_dep = dependency('wayland-server', version: wayland_req, required: true)
 
@@ -139,7 +137,6 @@ common_dep = [
 
     pixman_dep,
     libdrm_dep,
-    epoxy_dep,
 
     wayland_dep,
 ]
@@ -160,10 +157,6 @@ elif cc.compiles('''
     args: '-Werror-implicit-function-declaration',
     name: 'pthread_setname_np(name)')
     add_project_arguments('-DHAVE_PTHREAD_SETNAME_NP_WITHOUT_TID=1', language: 'c')
-endif
-
-if egl_renderer
-    add_project_arguments('-DHAVE_EGL_SUPPORT=1', language: 'c')
 endif
 
 subdir('meatball')

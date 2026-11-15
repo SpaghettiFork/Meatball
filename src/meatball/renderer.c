@@ -425,9 +425,6 @@ InstallRenderer (Renderer *renderer)
 void
 InitRenderers (struct meatball_config *config)
 {
-#if defined(HAVE_EGL_SUPPORT)
-    InitEGL ();
-#endif
     InitPictureRenderer (config);
 }
 
@@ -451,18 +448,8 @@ SetRenderer (struct meatball_config *config)
 {
     Renderer *renderer_ptr;
 
-#if defined(HAVE_EGL_SUPPORT)
-    if (config->render_fd)
-    {
-        renderer_ptr = (Renderer *)GetRenderer (RENDERER_EGL);
-        mb_log (X_INFO, "meatball: Using EGL renderer.\n");
-    }
-    else
-#endif
-    {
-        renderer_ptr = (Renderer *)GetRenderer (RENDERER_PICTURE);
-        mb_log (X_INFO, "meatball: Using software renderer.\n");
-    }
+    renderer_ptr = (Renderer *)GetRenderer (RENDERER_PICTURE);
+    mb_log (X_INFO, "meatball: Using picture renderer.\n");
 
     InstallRenderer (renderer_ptr);
 }
