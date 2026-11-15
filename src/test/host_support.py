@@ -33,7 +33,7 @@ def receive_exact(connection, size):
     return bytes(data)
 
 
-def connect_x11(display):
+def connect_x11(display, return_setup=False):
     connection = socket.socket(socket.AF_UNIX)
     connection.settimeout(STARTUP_TIMEOUT)
     try:
@@ -45,7 +45,7 @@ def connect_x11(display):
         setup = receive_exact(connection, length * X11_WORD_BYTES)
         if status != X11_SUCCESS or major != X11_MAJOR:
             raise RuntimeError(f"X11 setup failed: {setup!r}")
-        return connection
+        return (connection, setup) if return_setup else connection
     except BaseException:
         connection.close()
         raise

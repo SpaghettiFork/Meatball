@@ -25,6 +25,13 @@ class Wayland:
     def close(self):
         self.connection.close()
 
+    def disconnected(self):
+        try:
+            while self.connection.recv(WAYLAND_HEADER_SIZE):
+                pass
+        except ConnectionResetError:
+            pass
+
     def allocate_id(self):
         result = self.next_id
         self.next_id += 1

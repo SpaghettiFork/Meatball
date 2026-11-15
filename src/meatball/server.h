@@ -7,6 +7,7 @@
 #include "meatball.h"
 #include "meatball_log.h"
 #include "native_client.h"
+#include "native_surface.h"
 #include "native_window.h"
 #include <dixstruct.h>
 #include <resource.h>
@@ -19,6 +20,8 @@ typedef struct
     char *socket_path;
     struct MbAtoms atoms;
     RESTYPE window_type;
+    struct wl_global *surface_global;
+    struct wl_list surfaces;
     struct wl_list clients;
     struct wl_listener client_created;
     MbClient *bridge_client;
