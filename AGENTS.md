@@ -4,35 +4,9 @@ A Wayland implementation on X11, based upon 12to11 that lets Spaghetti users sle
 
 ## Supported platforms.
 
-> Software acceleration
-
-- Anything.
-
-> Hardware acceleration
-
-- A video DDX with DRI3 v1.2 support [1] [2]
-- An EGL capable graphics card with the following extensions supported:
-  - `GL_OES_EGL_sync`
-  - `GL_OES_EGL_image`
-  - `GL_OES_EGL_image_external`
-  - `GL_EXT_read_format_bgra`
-  - `GL_EXT_unpack_subimage`
-  - `EGL_KHR_image_base`
-  - `EGL_EXT_platform_base`
-  - Either `EGL_EXT_device_drm_render_node` or `EGL_EXT_device_drm`
-- Additional optional but recommended extensions:
-  - `EGL_EXT_device_query`
-  - `EGL_EXT_image_dma_buf_import_modifiers`
-  - `EGL_KHR_fence_sync`
-  - `EGL_KHR_wait_sync`
-  - `EGL_ANDROID_native_fence_sync`
-  - `EGL_EXT_swap_buffers_with_damage`
-  - `EGL_EXT_buffer_age`
-  - `EGL_KHR_partial_update`
-
-[1] `modesetting` is the only video DDX that currently supports this.
-
-[2] All graphics devices known to Spaghetti *MUST* support DRI3 v1.2 for it to be exposed.
+Meatball uses Xorg Render and Present. Rendering acceleration follows the
+capabilities of the server's video DDX. Dmabuf buffers require DRI3 import
+support from that DDX.
 
 ## Enabling Meatball
 
@@ -44,8 +18,7 @@ Use the SDK from the Spaghetti build that will load the module:
 
 ```sh
 meson setup src/builddir src \
-    -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build \
-    -Degl_renderer=false
+    -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build
 meson compile -C src/builddir
 meson test -C src/builddir --print-errorlogs
 ```

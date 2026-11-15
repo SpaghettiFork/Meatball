@@ -53,7 +53,6 @@
 #include "meatball_log.h"
 #include "transfer_atoms.h"
 
-#define RENDERER_EGL "egl"
 #define RENDERER_PICTURE "picture"
 
 #define TRUE 1
@@ -2162,14 +2161,6 @@ extern Bool HandleErrorForPictureRenderer (XErrorEvent *);
 extern Bool HandleOneXEventForPictureRenderer (XEvent *);
 
 extern void InitPictureRenderer (struct meatball_config *);
-
-#if defined(HAVE_EGL_SUPPORT)
-
-/* Defined in egl_renderer.c.  */
-
-extern void InitEGL (void);
-
-#endif
 
 /* Defined in explicit_synchronization.c.  */
 
