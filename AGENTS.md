@@ -13,14 +13,15 @@ part of the remaining port.
 
 ## Enabling Meatball
 
-The native module currently handles core Wayland requests and version 1
+The native module currently handles core Wayland requests and version 4
 `wl_compositor` surfaces on Spaghetti's server thread, with native window
 ownership and committed input regions. SHM buffers use native imports and
-Render with an independent server copy for redraws. Version 1 xdg toplevels
-support configure acknowledgements, titles, application IDs, parent windows,
+Render with an independent server copy for redraws. Buffer scales, all eight
+buffer transforms, and buffer-coordinate damage are supported. Version 1 xdg
+toplevels support configure acknowledgements, titles, application IDs, parent windows,
 size hints, WM state requests, close requests, unmapping, and remapping.
 
-This is an initial rendering checkpoint. Subsurfaces, transforms, Present,
+This is an initial rendering checkpoint. Subsurfaces, Present,
 DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
 settings, and leases remain to be ported. Frame callbacks currently use a
 16 ms server-loop timer. Text-input-v3 is deferred.
@@ -121,6 +122,8 @@ imported file during rendering to exercise Spaghetti's SIGBUS handling.
 `native-xdg` checks mapped pixel content, a test X11 window manager, configure
 serials, WM messages and properties, size hints, parent inheritance, protocol
 errors, remapping, and resets.
+`native-transforms` checks all buffer orientations, integer scales, committed
+geometry, retained pixels after release, and invalid surface state.
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is

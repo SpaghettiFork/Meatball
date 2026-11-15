@@ -96,9 +96,12 @@ class Wayland:
                 version, = struct.unpack_from("=I", payload, version_offset)
                 globals_found[payload[8:8 + length - 1].decode("ascii")] = (name, version)
 
-    def bind(self, interface):
+    def bind(self, interface, version=None):
         globals_found = self.globals()
-        name, version = globals_found[interface]
+        name, advertised_version = globals_found[interface]
+        if version is None:
+            version = advertised_version
+        assert 0 < version <= advertised_version
         object_id = self.allocate_id()
         encoded = interface.encode("ascii") + b"\0"
         padded = encoded + bytes(-len(encoded) % 4)

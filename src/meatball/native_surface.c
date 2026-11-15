@@ -196,10 +196,38 @@ static void
 surface_damage (struct wl_client *client, struct wl_resource *resource,
                 int32_t x, int32_t y, int32_t width, int32_t height)
 {
+    /* Commits redraw the full surface from its server-owned snapshot. */
+}
+
+static void
+surface_transform (struct wl_client *client, struct wl_resource *resource,
+                   int32_t transform)
+{
     MbSurface *surface = wl_resource_get_user_data (resource);
 
-    if (width > 0 && height > 0)
-        surface->damage_pending = TRUE;
+    if (transform < WL_OUTPUT_TRANSFORM_NORMAL ||
+        transform > WL_OUTPUT_TRANSFORM_FLIPPED_270)
+    {
+        wl_resource_post_error (resource, WL_SURFACE_ERROR_INVALID_TRANSFORM,
+                                "invalid buffer transform");
+        return;
+    }
+    surface->pending_transform = transform;
+}
+
+static void
+surface_scale (struct wl_client *client, struct wl_resource *resource,
+               int32_t scale)
+{
+    MbSurface *surface = wl_resource_get_user_data (resource);
+
+    if (scale <= 0)
+    {
+        wl_resource_post_error (resource, WL_SURFACE_ERROR_INVALID_SCALE,
+                                "buffer scale must be positive");
+        return;
+    }
+    surface->pending_scale = scale;
 }
 
 static void
@@ -308,9 +336,38 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
 {
     MbSurface *surface = wl_resource_get_user_data (resource);
     WindowPtr native = mb_window_get (&surface->window, DixSetAttrAccess);
+    MbShmBuffer *buffer =
+        surface->attach_pending ? surface->pending_buffer : surface->buffer;
+    int32_t width = 0, height = 0;
+    Bool offset = surface->attach_pending && buffer &&
+                  (surface->pending_x || surface->pending_y);
+
+    if (buffer)
+    {
+        Bool rotated =
+            surface->pending_transform == WL_OUTPUT_TRANSFORM_90 ||
+            surface->pending_transform == WL_OUTPUT_TRANSFORM_270 ||
+            surface->pending_transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 ||
+            surface->pending_transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
+
+        if (buffer->width % surface->pending_scale ||
+            buffer->height % surface->pending_scale)
+        {
+            wl_resource_post_error (
+                resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                "buffer dimensions must be multiples of scale");
+            return;
+        }
+        width = (rotated ? buffer->height : buffer->width) /
+                surface->pending_scale;
+        height = (rotated ? buffer->width : buffer->height) /
+                 surface->pending_scale;
+    }
 
     if (!native || !mb_xdg_commit (surface))
         return;
+    surface->scale = surface->pending_scale;
+    surface->transform = surface->pending_transform;
     if (surface->input_changed)
     {
         if (!pixman_region32_copy (&surface->input, &surface->pending_input))
@@ -318,28 +375,18 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
         surface->input_default = surface->pending_input_default;
         surface->input_changed = FALSE;
     }
-    if (surface->attach_pending ||
-        (surface->damage_pending && surface->buffer &&
-         surface->buffer->resource))
+    if (surface->attach_pending)
     {
-        Bool attached = surface->attach_pending;
-
-        if (attached)
-        {
-            if (surface->buffer)
-                mb_shm_buffer_unref (surface->buffer);
-            surface->buffer = surface->pending_buffer;
-            surface->pending_buffer = NULL;
-            surface->attach_pending = FALSE;
-        }
+        if (surface->buffer)
+            mb_shm_buffer_unref (surface->buffer);
+        surface->buffer = surface->pending_buffer;
+        surface->pending_buffer = NULL;
+        surface->attach_pending = FALSE;
         if (surface->buffer)
         {
             PixmapPtr copy =
                 mb_shm_snapshot (surface->buffer, surface->window.screen);
             XID id;
-            XID values[4];
-            Mask mask = CWWidth | CWHeight;
-            unsigned int count = 0;
 
             if (!copy)
                 goto fail;
@@ -349,30 +396,6 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
                 goto fail;
             free_pixels (surface);
             surface->pixels = id;
-            surface->width = surface->buffer->width;
-            surface->height = surface->buffer->height;
-            if (attached && (surface->pending_x || surface->pending_y))
-            {
-                int64_t x = (int64_t)native->origin.x + surface->pending_x;
-                int64_t y = (int64_t)native->origin.y + surface->pending_y;
-
-                if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
-                    y > INT16_MAX)
-                {
-                    wl_resource_post_error (
-                        resource, WL_SURFACE_ERROR_INVALID_SIZE,
-                        "buffer offset exceeds native coordinates");
-                    return;
-                }
-                values[count++] = (INT32)x;
-                values[count++] = (INT32)y;
-                mask |= CWX | CWY;
-            }
-            values[count++] = surface->width;
-            values[count++] = surface->height;
-            if (ConfigureWindow (native, mask, values,
-                                 surface->client->native) != Success)
-                goto fail;
             if (surface->buffer->resource)
                 wl_buffer_send_release (surface->buffer->resource);
         }
@@ -383,7 +406,39 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
             UnmapWindow (native, FALSE);
         }
     }
-    surface->damage_pending = FALSE;
+    if (surface->pixels &&
+        (offset || surface->width != width || surface->height != height))
+    {
+        XID values[4];
+        Mask mask = CWWidth | CWHeight;
+        unsigned int count = 0;
+
+        if (offset)
+        {
+            int64_t x = (int64_t)native->origin.x + surface->pending_x;
+            int64_t y = (int64_t)native->origin.y + surface->pending_y;
+
+            if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
+                y > INT16_MAX)
+            {
+                wl_resource_post_error (
+                    resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                    "buffer offset exceeds native coordinates");
+                return;
+            }
+            values[count++] = (INT32)x;
+            values[count++] = (INT32)y;
+            mask |= CWX | CWY;
+        }
+        values[count++] = width;
+        values[count++] = height;
+
+        if (ConfigureWindow (native, mask, values, surface->client->native) !=
+            Success)
+            goto fail;
+    }
+    surface->width = width;
+    surface->height = height;
     if (!apply_input (surface, native))
         goto fail;
     wl_list_insert_list (surface->frames.prev, &surface->pending_frames);
@@ -404,6 +459,9 @@ static const struct wl_surface_interface surface_implementation = {
     .set_opaque_region = surface_opaque,
     .set_input_region = surface_input,
     .commit = surface_commit,
+    .set_buffer_transform = surface_transform,
+    .set_buffer_scale = surface_scale,
+    .damage_buffer = surface_damage,
 };
 
 static void
@@ -418,8 +476,8 @@ create_surface (struct wl_client *client, struct wl_resource *resource,
         wl_resource_post_no_memory (resource);
         return;
     }
-    surface->resource = wl_resource_create (client, &wl_surface_interface,
-                                            MB_COMPOSITOR_VERSION, id);
+    surface->resource = wl_resource_create (
+        client, &wl_surface_interface, wl_resource_get_version (resource), id);
     if (!surface->resource)
     {
         free (surface);
@@ -427,6 +485,7 @@ create_surface (struct wl_client *client, struct wl_resource *resource,
         return;
     }
     surface->client = owner;
+    surface->scale = surface->pending_scale = 1;
     surface->input_default = surface->pending_input_default = TRUE;
     wl_list_init (&surface->pending_frames);
     wl_list_init (&surface->frames);
@@ -533,8 +592,8 @@ static void
 bind_compositor (struct wl_client *client, void *data, uint32_t version,
                  uint32_t id)
 {
-    struct wl_resource *resource = wl_resource_create (
-        client, &wl_compositor_interface, MB_COMPOSITOR_VERSION, id);
+    struct wl_resource *resource =
+        wl_resource_create (client, &wl_compositor_interface, version, id);
 
     if (!resource)
     {
