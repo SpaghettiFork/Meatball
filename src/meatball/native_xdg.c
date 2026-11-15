@@ -91,13 +91,45 @@ apply_bounds (MbSurface *surface, WindowPtr window)
         if (result != Success || selection->window == None)
         {
             BoxRec box = { xdg->frame_extents[0], xdg->frame_extents[2],
-                           surface->width - xdg->frame_extents[1],
-                           surface->height - xdg->frame_extents[3] };
+                           surface->scene_width - xdg->frame_extents[1],
+                           surface->scene_height - xdg->frame_extents[3] };
+            MbSceneIterator iterator = { .root = surface, .surface = surface };
+            MbSurface *node;
 
             bounds = RegionCreate (
                 box.x1 < box.x2 && box.y1 < box.y2 ? &box : NULL, 0);
             if (!bounds)
                 return FALSE;
+            while ((node = mb_scene_next (&iterator)))
+            {
+                RegionRec child;
+                Bool success;
+                int64_t x = iterator.x - surface->scene_x;
+                int64_t y = iterator.y - surface->scene_y;
+
+                if (node == surface)
+                    continue;
+                if (x < 0 || y < 0 || x + node->width > surface->scene_width ||
+                    y + node->height > surface->scene_height)
+                {
+                    RegionDestroy (bounds);
+                    return FALSE;
+                }
+                box = (BoxRec){ x, y, x + node->width, y + node->height };
+                RegionInit (&child, &box, 0);
+                success = RegionUnion (bounds, bounds, &child);
+                RegionUninit (&child);
+                if (!success)
+                {
+                    RegionDestroy (bounds);
+                    return FALSE;
+                }
+            }
+            if (iterator.failed)
+            {
+                RegionDestroy (bounds);
+                return FALSE;
+            }
         }
     }
     if ((!bounds && !wBoundingShape (window)) ||
@@ -781,7 +813,8 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     char selection_name[sizeof (COMPOSITOR_SELECTION_FORMAT) +
                         sizeof (int) * CHAR_BIT];
 
-    if (surface->xdg || surface->buffer || surface->pending_buffer)
+    if (surface->xdg || surface->buffer || surface->pending_buffer ||
+        surface->role == MB_ROLE_SUBSURFACE)
     {
         wl_resource_post_error (resource,
                                 XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
@@ -821,6 +854,7 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     xdg->refs = 2;
     wl_list_init (&xdg->configures);
     surface->xdg = xdg;
+    surface->role = MB_ROLE_XDG;
     wl_resource_set_implementation (xdg->resource, &xdg_implementation, xdg,
                                     xdg_destroyed);
 }
@@ -999,11 +1033,15 @@ mb_xdg_map (MbSurface *surface)
     {
         int64_t x2 = (int64_t)xdg->geometry_x + xdg->geometry_width;
         int64_t y2 = (int64_t)xdg->geometry_y + xdg->geometry_height;
+        int32_t right = surface->scene_x + surface->scene_width;
+        int32_t bottom = surface->scene_y + surface->scene_height;
         CARD32 extents[] = {
-            min (surface->width, max (0, xdg->geometry_x)),
-            surface->width - min (surface->width, max (0, x2)),
-            min (surface->height, max (0, xdg->geometry_y)),
-            surface->height - min (surface->height, max (0, y2)),
+            min (right, max (surface->scene_x, xdg->geometry_x)) -
+                surface->scene_x,
+            right - min (right, max (surface->scene_x, x2)),
+            min (bottom, max (surface->scene_y, xdg->geometry_y)) -
+                surface->scene_y,
+            bottom - min (bottom, max (surface->scene_y, y2)),
         };
 
         if (memcmp (xdg->frame_extents, extents, sizeof (extents)))

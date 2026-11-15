@@ -31,9 +31,17 @@ margins to the client's committed window geometry. Compositor ownership changes
 update this shape automatically; a composited desktop retains the full alpha
 buffer and its shadows.
 
-This is an initial rendering checkpoint. Subsurfaces, Present,
-DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
-settings, and leases remain to be ported. Frame callbacks currently use a
+Version 1 `wl_subcompositor` supports synchronized and desynchronized content
+updates, nested subsurfaces, parent-committed positions, and stacking above or
+below siblings and the parent. A surface tree renders into one native window,
+including children outside the parent's buffer. The canvas is limited to
+32767 pixels per direction and 256 MiB; each surface can queue 256 commits.
+SHM pixels are copied when committed, and frame callbacks wait until the
+corresponding surface state is visible in a mapped tree.
+
+This is an initial rendering checkpoint. Present, DRI3 buffers, Wayland input,
+output globals, popups, clipboard, drag and drop, settings, and leases remain
+to be ported. Frame callbacks currently use a
 16 ms server-loop timer. Text-input-v3 is deferred.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
@@ -138,6 +146,9 @@ geometry, retained pixels after release, and invalid surface state.
 fractional rectangles, commit timing, protocol errors, destruction, and resets.
 `native-shadows` checks desktop pixels around client shadow margins, preserved
 alpha, compositor ownership changes, geometry commits, remapping, and resets.
+`native-subsurfaces` checks synchronized content, nested commit dependencies,
+parent-committed position and stacking, alpha, negative coordinates, input
+regions, buffer transforms and viewports, role lifetime, destruction, and reset.
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is

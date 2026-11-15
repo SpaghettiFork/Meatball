@@ -10,6 +10,20 @@
 #define MB_MAX_DIMENSION INT16_MAX
 
 typedef struct MbSurface MbSurface;
+struct MbSubsurface;
+
+typedef enum
+{
+    MB_ROLE_NONE,
+    MB_ROLE_XDG,
+    MB_ROLE_SUBSURFACE,
+} MbSurfaceRole;
+
+typedef struct
+{
+    struct MbSubsurface *subsurface;
+    int32_t x, y;
+} MbPlacement;
 
 typedef struct
 {
@@ -28,6 +42,8 @@ typedef struct
 typedef struct MbSurfaceCommit
 {
     struct wl_list link;
+    struct wl_list dependency_link, dependencies;
+    struct MbSurfaceCommit *parent, *resume;
     MbSurface *surface;
     MbSurfaceContent *content;
     struct wl_list frames;
@@ -36,6 +52,9 @@ typedef struct MbSurfaceCommit
     MbViewportState crop;
     int32_t width, height, scale, transform;
     int32_t offset_x, offset_y;
+    Bool synchronized;
+    MbPlacement *stack;
+    size_t stack_count;
 } MbSurfaceCommit;
 
 struct MbSurface
@@ -43,6 +62,12 @@ struct MbSurface
     struct wl_list link;
     struct wl_resource *resource;
     MbClient *client;
+    MbSurfaceRole role;
+    struct MbSubsurface *subsurface;
+    struct wl_list pending_stack, pending_self;
+    MbPlacement *stack;
+    size_t stack_count;
+    unsigned int commit_count;
     struct MbXdgSurface *xdg;
     struct MbViewport *viewport;
     MbViewportState crop, pending_crop;
@@ -66,6 +91,7 @@ struct MbSurface
     int32_t pending_x, pending_y;
     int32_t offset_x, offset_y;
     int32_t scene_width, scene_height;
+    int32_t scene_x, scene_y;
     struct wl_event_source *frame_timer;
     Bool frame_timer_armed;
 };
