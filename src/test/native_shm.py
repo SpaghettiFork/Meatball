@@ -27,7 +27,7 @@ HEIGHT = 2
 NORMAL_STRIDE = 12
 LARGE_STRIDE = 1 << 16
 BUFFER_OFFSET = 4
-COLORS = (0xff123456, 0xffabcdef, 0xff654321, 0xfffedcba)
+COLORS = (0x80402010, 0x00000000, 0xff654321, 0xfffedcba)
 RGB_MASK = 0xffffff
 SHM_ARGB8888 = 0
 SHM_XRGB8888 = 1
@@ -49,20 +49,20 @@ def create_buffer(client, pool, offset, width, height, stride, format):
     return buffer
 
 
-def get_image(x11, window):
+def get_image(x11, window, mask=RGB_MASK):
     x11.sendall(struct.pack("<BBHIhhHHI", GET_IMAGE, Z_PIXMAP, 5, window,
                             0, 0, WIDTH, HEIGHT, 0xffffffff))
     reply = receive_exact(x11, X11_REPLY_SIZE)
     assert reply[0] == 1, reply
     length, = struct.unpack_from("<I", reply, 4)
     pixels = receive_exact(x11, length * 4)
-    return tuple(value & RGB_MASK for value in struct.unpack(f"={WIDTH * HEIGHT}I", pixels))
+    return tuple(value & mask for value in struct.unpack(f"={WIDTH * HEIGHT}I", pixels))
 
 
-def wait_pixels(x11, window, expected_colors=COLORS):
-    expected = tuple(value & RGB_MASK for value in expected_colors)
+def wait_pixels(x11, window, expected_colors=COLORS, mask=RGB_MASK):
+    expected = tuple(value & mask for value in expected_colors)
     deadline = time.monotonic() + STARTUP_TIMEOUT
-    while get_image(x11, window) != expected:
+    while get_image(x11, window, mask) != expected:
         assert time.monotonic() < deadline, "Native Render pixel check timed out"
         time.sleep(POLL_INTERVAL)
 
@@ -98,7 +98,8 @@ def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, f
             client.send(buffer, BUFFER_DESTROY)
         client.sync()
         x11.sendall(struct.pack("<BBHI", MAP_WINDOW, 0, 2, window))
-        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS)
+        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS,
+                    0xffffffff if format == SHM_ARGB8888 else RGB_MASK)
         callback = client.allocate_id()
         client.send(surface, WL_SURFACE_FRAME, struct.pack("=I", callback))
         client.send(surface, WL_SURFACE_COMMIT)
@@ -109,7 +110,8 @@ def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, f
                 break
         x11.sendall(struct.pack("<BBHIhhHH", CLEAR_AREA, 1, 4, window,
                                 0, 0, WIDTH, HEIGHT))
-        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS)
+        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS,
+                    0xffffffff if format == SHM_ARGB8888 else RGB_MASK)
         callback = client.allocate_id()
         client.send(surface, WL_SURFACE_FRAME, struct.pack("=I", callback))
         client.send(surface, WL_SURFACE_COMMIT)

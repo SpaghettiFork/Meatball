@@ -21,6 +21,7 @@ struct MbAtoms
 typedef struct
 {
     XID id;
+    XID colormap;
     uint64_t owner;
     ScreenPtr screen;
     Bool destroying;
