@@ -26,6 +26,10 @@ and remapping.
 Toplevels use client-side decorations and request an undecorated X11 window
 through `_MOTIF_WM_HINTS`. Window geometry supplies `_GTK_FRAME_EXTENTS` for
 client-drawn shadows. Server-side decoration negotiation remains to be ported.
+When the screen has no X11 compositor, the native bounding shape clips shadow
+margins to the client's committed window geometry. Compositor ownership changes
+update this shape automatically; a composited desktop retains the full alpha
+buffer and its shadows.
 
 This is an initial rendering checkpoint. Subsurfaces, Present,
 DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
@@ -132,6 +136,8 @@ errors, remapping, and resets.
 geometry, retained pixels after release, and invalid surface state.
 `native-viewport` checks cropped pixels across buffer orientations and scales,
 fractional rectangles, commit timing, protocol errors, destruction, and resets.
+`native-shadows` checks desktop pixels around client shadow margins, preserved
+alpha, compositor ownership changes, geometry commits, remapping, and resets.
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is

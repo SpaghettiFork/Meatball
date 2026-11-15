@@ -36,6 +36,7 @@ typedef struct
     Bool clients_stopping;
     Bool loop_notify_registered;
     Bool loop_block_registered;
+    Bool xdg_shapes_dirty;
 } Compositor;
 
 extern Compositor compositor;

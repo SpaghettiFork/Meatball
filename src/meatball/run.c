@@ -29,6 +29,7 @@ static void
 loop_block (void *data, void *timeout)
 {
     mb_clients_check ();
+    mb_xdg_refresh_shapes ();
     wl_event_loop_dispatch_idle (compositor.wl_event_loop);
     wl_display_flush_clients (compositor.wl_display);
 }
