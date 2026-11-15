@@ -10,6 +10,7 @@
 #include "native_shm.h"
 #include "native_surface.h"
 #include "native_window.h"
+#include "native_xdg.h"
 #include <dixstruct.h>
 #include <resource.h>
 #include <wayland-server-core.h>
@@ -21,6 +22,7 @@ typedef struct
     char *socket_path;
     struct MbAtoms atoms;
     RESTYPE window_type;
+    struct wl_global *xdg_global;
     struct wl_global *shm_global;
     struct wl_global *surface_global;
     struct wl_list surfaces;

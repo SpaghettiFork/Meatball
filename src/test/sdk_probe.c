@@ -7,6 +7,7 @@
 #include <external.h>
 #include <present.h>
 #include <shmint.h>
+#include <xace.h>
 #include <xf86Module.h>
 
 __attribute__ ((
@@ -21,6 +22,11 @@ __attribute__ ((used)) static __typeof__ (&RRLeaseCreate) create_lease =
     RRLeaseCreate;
 __attribute__ ((used)) static __typeof__ (&RRTerminateLease) terminate_lease =
     RRTerminateLease;
+#ifdef XACE
+__attribute__ ((
+    used)) static __typeof__ (&XaceHookSendAccess) check_send_access =
+    XaceHookSendAccess;
+#endif
 #ifdef DRI3
 __attribute__ ((used)) static __typeof__ (&dri3_open) open_device = dri3_open;
 __attribute__ ((

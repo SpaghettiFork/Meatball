@@ -37,6 +37,15 @@ mb_windows_initialize (void)
         { "_NET_WM_NAME", &compositor.atoms.net_wm_name },
         { "UTF8_STRING", &compositor.atoms.utf8_string },
         { "_NET_WM_PID", &compositor.atoms.net_wm_pid },
+        { "_NET_WM_STATE", &compositor.atoms.net_wm_state },
+        { "_NET_WM_STATE_FULLSCREEN", &compositor.atoms.net_wm_fullscreen },
+        { "_NET_WM_STATE_MAXIMIZED_HORZ",
+          &compositor.atoms.net_wm_maximized_horz },
+        { "_NET_WM_STATE_MAXIMIZED_VERT",
+          &compositor.atoms.net_wm_maximized_vert },
+        { "_NET_WM_STATE_FOCUSED", &compositor.atoms.net_wm_focused },
+        { "WM_CHANGE_STATE", &compositor.atoms.wm_change_state },
+        { "_GTK_FRAME_EXTENTS", &compositor.atoms.gtk_frame_extents },
     };
     unsigned int i;
 

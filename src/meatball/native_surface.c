@@ -102,6 +102,12 @@ surface_output (MbClient *client, const void *message, size_t size)
     case ConfigureNotify:
         window = event->u.configureNotify.window;
         break;
+    case ClientMessage:
+        window = event->u.clientMessage.window;
+        break;
+    case PropertyNotify:
+        window = event->u.property.window;
+        break;
     default:
         return;
     }
@@ -112,6 +118,7 @@ surface_output (MbClient *client, const void *message, size_t size)
             WindowPtr native =
                 mb_window_get (&surface->window, DixSetAttrAccess);
 
+            mb_xdg_event (surface, event);
             if (native && !apply_input (surface, native))
             {
                 wl_resource_post_no_memory (surface->resource);
@@ -130,6 +137,7 @@ surface_destroyed (struct wl_resource *resource)
     MbSurface *surface = wl_resource_get_user_data (resource);
     struct Frame *frame, *next;
 
+    mb_xdg_surface_destroyed (surface);
     if (surface->frame_timer)
         wl_event_source_remove (surface->frame_timer);
     if (surface->pending_buffer)
@@ -155,6 +163,10 @@ surface_destroyed (struct wl_resource *resource)
 static void
 surface_destroy (struct wl_client *client, struct wl_resource *resource)
 {
+    MbSurface *surface = wl_resource_get_user_data (resource);
+
+    if (!mb_xdg_surface_destroy_request (surface))
+        return;
     wl_resource_destroy (resource);
 }
 
@@ -297,7 +309,7 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
     MbSurface *surface = wl_resource_get_user_data (resource);
     WindowPtr native = mb_window_get (&surface->window, DixSetAttrAccess);
 
-    if (!native)
+    if (!native || !mb_xdg_commit (surface))
         return;
     if (surface->input_changed)
     {
@@ -344,8 +356,8 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
                 int64_t x = (int64_t)native->origin.x + surface->pending_x;
                 int64_t y = (int64_t)native->origin.y + surface->pending_y;
 
-                if (x < INT16_MIN || x > INT16_MAX ||
-                    y < INT16_MIN || y > INT16_MAX)
+                if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
+                    y > INT16_MAX)
                 {
                     wl_resource_post_error (
                         resource, WL_SURFACE_ERROR_INVALID_SIZE,
@@ -376,7 +388,7 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
         goto fail;
     wl_list_insert_list (surface->frames.prev, &surface->pending_frames);
     wl_list_init (&surface->pending_frames);
-    if (!redraw (surface))
+    if (!mb_xdg_map (surface) || !redraw (surface))
         goto fail;
     return;
 

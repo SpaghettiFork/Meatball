@@ -7,17 +7,23 @@ A Wayland implementation inside Spaghetti, based upon 12to11.
 The native host currently targets Linux and uses `/proc/self/fd` when setting
 socket permissions.
 
-Meatball uses Xorg Render and Present. Rendering acceleration follows the
-capabilities of the server's video DDX. Dmabuf buffers require DRI3 import
-support from that DDX.
+The current renderer uses Xorg Render. Rendering acceleration follows the
+capabilities of the server's video DDX. Present and DRI3 dmabuf imports are
+part of the remaining port.
 
 ## Enabling Meatball
 
 The native module currently handles core Wayland requests and version 1
 `wl_compositor` surfaces on Spaghetti's server thread, with native window
 ownership and committed input regions. SHM buffers use native imports and
-Render with an independent server copy for redraws. Shell roles and Wayland
-input are being ported and remain unavailable.
+Render with an independent server copy for redraws. Version 1 xdg toplevels
+support configure acknowledgements, titles, application IDs, parent windows,
+size hints, WM state requests, close requests, unmapping, and remapping.
+
+This is an initial rendering checkpoint. Subsurfaces, transforms, Present,
+DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
+settings, and leases remain to be ported. Frame callbacks currently use a
+16 ms server-loop timer. Text-input-v3 is deferred.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
@@ -42,6 +48,11 @@ meson compile -C src/builddir
 meson test -C src/builddir --print-errorlogs
 ```
 
+The SDK must include the 32-bit native SHM stride parameter and the exported
+XACE send-access hook on Spaghetti's `meatball` branch. The configuration
+check validates the SHM signature, and the
+SDK probe validates the required exports.
+
 Build Spaghetti with Xvfb enabled first. The test host relinks its existing
 objects with a module-loading hook and runs a separate CPU-backed X server.
 The `native-sdk` test loads a probe for the required server exports and checks
@@ -61,6 +72,13 @@ callbacks, destruction, and reset cleanup.
 `native-shm` checks imports, wide strides, buffer release, pixel readback, and
 redraws after the client reuses its storage. `native-shm-fault` truncates an
 imported file during rendering to exercise Spaghetti's SIGBUS handling.
+`native-xdg` checks mapped pixel content, a test X11 window manager, configure
+serials, WM messages and properties, size hints, parent inheritance, protocol
+errors, remapping, and resets.
+
+The integration checks run on the CPU Xvfb test host. The module also passes
+these checks with address and undefined-behavior sanitizers; leak detection is
+disabled for that host.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.
