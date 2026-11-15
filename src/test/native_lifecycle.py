@@ -33,12 +33,18 @@ def check_extension(connection):
 
 def wait_socket(path, process):
     deadline = time.monotonic() + STARTUP_TIMEOUT
-    while not path.is_socket():
+    while True:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISSOCK(info.st_mode) and stat.S_IMODE(info.st_mode) == SOCKET_MODE:
+                return
         assert process.poll() is None, "X server exited during initialization"
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Wayland socket did not appear: {path}")
+            raise RuntimeError(f"Wayland socket did not become ready with mode {SOCKET_MODE:o}: {path}")
         time.sleep(POLL_INTERVAL)
-    assert stat.S_IMODE(path.stat().st_mode) == SOCKET_MODE
 
 
 def connect_wayland(path):
