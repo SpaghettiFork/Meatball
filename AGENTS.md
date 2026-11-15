@@ -32,6 +32,30 @@ permissions and defaults to `0600`. The parent directory must already exist.
 When running as root, the module assigns the socket to that directory's owner
 and group. Clients select the absolute path through `WAYLAND_DISPLAY`.
 
+Configure module options through a `sauce` subsection inside the existing
+`Module` section:
+
+```conf
+Section "Module"
+    SubSection "sauce"
+        Option "SocketPath" "/run/user/1000/wayland-meatball-0"
+        Option "SocketMode" "0600"
+    EndSubSection
+EndSection
+```
+
+Use your session user's runtime directory; `1000` is the example UID. Preserve
+other module entries in that section. The subsection loads Sauce with its
+options, so replace an existing `Load "sauce"` entry with this subsection.
+Use a literal absolute path in `SocketPath`. For automatic socket naming,
+set `XDG_RUNTIME_DIR` in the environment used to launch Xorg.
+
+After starting Spaghetti with this configuration, launch clients with:
+
+```sh
+WAYLAND_DISPLAY=/run/user/1000/wayland-meatball-0 your-wayland-client
+```
+
 Configuration ABI 2.0 replaces the previous process and renderer options with
 `socket_path` and `socket_mode`. Module setup registers the `MEATBALL` X
 extension. Its X protocol dispatcher returns `BadRequest`; Wayland clients
