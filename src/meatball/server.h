@@ -14,8 +14,13 @@ typedef struct
     struct wl_display *wl_display;
     struct wl_event_loop *wl_event_loop;
     char *socket_path;
+    Bool loop_notify_registered;
+    Bool loop_block_registered;
 } Compositor;
 
 extern Compositor compositor;
+
+extern Bool mb_loop_initialize (void);
+extern void mb_loop_shutdown (void);
 
 #endif

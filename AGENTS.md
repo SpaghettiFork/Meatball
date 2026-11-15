@@ -10,8 +10,9 @@ support from that DDX.
 
 ## Enabling Meatball
 
-The native module currently creates a Wayland listener for each server
-generation. Surface rendering and input are being ported and remain unavailable.
+The native module currently handles core Wayland requests on Spaghetti's server
+thread, with a listener for each generation. Surface rendering and input are
+being ported and remain unavailable.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
@@ -42,6 +43,9 @@ The `native-sdk` test loads a probe for the required server exports and checks
 an X11 client connection. `native-lifecycle` loads the actual module and checks
 resets, socket cleanup, failed startup, and conflicting listeners. Tests need
 permission to create local Unix sockets.
+`native-loop` checks Wayland round trips alongside X11 traffic and a client
+that leaves replies unread. `native-scheduler` exercises Wayland idle handlers,
+timers, pipe reads, hangups, and source removal inside the server loop.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.
