@@ -18,7 +18,15 @@
 #ifndef _MEATBALL_H
 #define _MEATBALL_H
 
-#include <pthread.h>
+#include <X11/Xfuncproto.h>
+
+#define MEATBALL_VERSION_MAJOR 2
+#define MEATBALL_VERSION_MINOR 0
+#define MEATBALL_VERSION_PATCH 0
+#define MEATBALL_EXTENSION_NAME "MEATBALL"
+#define MEATBALL_SOCKET_PREFIX "wayland-meatball-"
+#define MEATBALL_DEFAULT_SOCKET_MODE 0600
+#define MEATBALL_SOCKET_MODE_MASK 0777
 
 typedef int _MEATBALL_BOOL;
 
@@ -28,64 +36,22 @@ enum MEATBALL_BOOL
     MEATBALL_TRUE = 1
 };
 
-enum meatball_flags
-{
-    MB_NONE = 0,
-    /* Force disable the EGL renderer, which forces
-     * Meatball to use Xorg's 2D acceleration instead. */
-    MB_FORCE_SOFTWARE_RENDERING = 0x2,
-    /* Expose all possible formats for SHM.
-     *
-     * Software renderer only. */
-    MB_PICTURE_EXPOSE_ALL_SHM_FORMATS = 0x4,
-    /* Request a high-priority rendering context.
-     * EGL renderer only. */
-    MB_EGL_HIGH_PRIORITY_CONTEXT = 0x8
-};
-
 struct meatball_config
 {
-    char display_name[8];
-
-    char *auth_file;
-
-    int log_pipe_write_fd;
-
-    /**
-     * File descriptor for the GPU used by the DDX.
-     *
-     * Will be used to target the correct device.
-     */
-    int render_fd;
-    /**
-     * Meatball flags to modify behaviour.
-     *
-     * See `meatball_flags` for accepted values.
-     */
-    unsigned long meatball_flags;
+    /* Absolute Unix socket path. Copied during initialization. */
+    const char *socket_path;
+    unsigned int socket_mode;
 };
 
-/**
- * Returns the version of Meatball present, encoded
- * in Xorg's version format.
- *
- * Used to check the ABI version in Sauce.
- *
- * Will decode into MAJOR.MINOR.PATCHLEVEL
- */
 extern _X_EXPORT void meatball_version (unsigned long *version);
 
-/**
- * Initializes the Meatball compatibility layer.
- *
- * Requires a valid, non-NULL `meatball_config` struct.
+/* Configuration storage remains owned by the caller. Failure releases all
+ * state allocated by this call. A running instance rejects initialization.
  */
 extern _X_EXPORT _MEATBALL_BOOL
-meatball_initialize (struct meatball_config *config);
+meatball_initialize (const struct meatball_config *config);
 
-/**
- * Shuts down the running Meatball instance if possible.
- */
+/* Safe before initialization and after a previous shutdown. */
 extern _X_EXPORT void meatball_shutdown (void);
 
-#endif /* _MEATBALL_H */
+#endif

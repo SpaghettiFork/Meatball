@@ -14,8 +14,11 @@ if spaghetti_build_dir != ''
                               command: [python, '-B', files('build_host.py'),
                                         spaghetti_build_dir, '@INPUT@', '@OUTPUT@'])
     test('native-sdk', python,
-         args: [files('host_smoke.py'), test_host, sdk_probe],
+         args: ['-B', files('host_smoke.py'), test_host, sdk_probe],
          timeout: 30)
+    test('native-lifecycle', python,
+         args: ['-B', files('native_lifecycle.py'), test_host, sauce],
+         timeout: 60)
 else
     message('Set spaghetti_build_dir to enable the isolated module test host')
 endif

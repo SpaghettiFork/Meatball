@@ -3,7 +3,7 @@ project('Meatball', 'c',
             'buildtype=debugoptimized',
             'c_std=gnu99',
         ],
-        version: '1.0.4',
+        version: '2.0.0',
         meson_version: '>= 0.58.0',
 )
 
@@ -45,7 +45,6 @@ add_project_arguments('-fno-strict-aliasing', language : 'c')
 add_project_arguments('-fvisibility=hidden', language : 'c')
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 add_project_arguments('-D_DEFAULT_SOURCE', language: 'c')
-add_project_arguments('-DXCSECURITY', language: 'c')
 
 add_project_link_arguments('-fvisibility=hidden', language : 'c')
 
@@ -94,70 +93,11 @@ endforeach
 
 add_project_arguments(common_wflags, language : ['c', 'objc'])
 
-libdrm_req = '>= 2.4.116'
-libselinux_req = '>= 2.0.86'
-xext_req = '>= 1.0.99.4'
-xproto_req = '>= 7.0.31'
-wayland_req = '>= 1.21.0'
-gbm_req = '>= 10.2'
-xf86dgaproto_req = '>= 2.0.99.1'
-xshmfence_req = '>= 1.1'
-
-x11_dep = dependency('x11')
-xpresent_dep = dependency('xpresent', required : true)
-xcb_randr_dep = dependency('xcb-randr', required : true)
-xcb_dri3_dep = dependency('xcb-dri3', required : true)
-xcb_shape_dep = dependency('xcb-shape', required : true)
-xcb_shm_dep = dependency('xcb-shm', required : true)
-x11_xcb_dep = dependency('x11-xcb', required : true)
-xcb_dep = dependency('xcb', required : true)
-xfixes_dep = dependency('xfixes', required : true)
-xrandr_dep = dependency('xrandr', required : true)
-xi_dep = dependency('xi', required : true)
-xshmfence_dep = dependency('xshmfence', required : true)
-
 pixman_dep = dependency('pixman-1')
-libdrm_dep = dependency('libdrm', version: libdrm_req, required: true)
+libdrm_dep = dependency('libdrm', version: '>= 2.4.116')
+wayland_dep = dependency('wayland-server', version: '>= 1.21.0')
 
-wayland_dep = dependency('wayland-server', version: wayland_req, required: true)
-
-common_dep = [
-    x11_dep,
-    xpresent_dep,
-    xcb_randr_dep,
-    xcb_dri3_dep,
-    xcb_shape_dep,
-    xcb_shm_dep,
-    x11_xcb_dep,
-    xcb_dep,
-    xfixes_dep,
-    xrandr_dep,
-    xi_dep,
-    xshmfence_dep,
-
-    pixman_dep,
-    libdrm_dep,
-
-    wayland_dep,
-]
-
-if cc.compiles('''
-    #define _GNU_SOURCE 1
-    #include <pthread.h>
-    void foo(int bar) { pthread_setname_np(pthread_self(), "example"); }
-''',
-    args: '-Werror-implicit-function-declaration',
-    name: 'pthread_setname_np(tid, name)')
-    add_project_arguments('-DHAVE_PTHREAD_SETNAME_NP_WITH_TID=1', language: 'c')
-elif cc.compiles('''
-    #define _GNU_SOURCE 1
-    #include <pthread.h>
-    void foo(int bar) { pthread_setname_np("example"); }
-''',
-    args: '-Werror-implicit-function-declaration',
-    name: 'pthread_setname_np(name)')
-    add_project_arguments('-DHAVE_PTHREAD_SETNAME_NP_WITHOUT_TID=1', language: 'c')
-endif
+common_dep = [server_sdk, pixman_dep, libdrm_dep, wayland_dep]
 
 subdir('meatball')
 
