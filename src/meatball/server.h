@@ -7,6 +7,7 @@
 #include "meatball.h"
 #include "meatball_log.h"
 #include "native_client.h"
+#include "native_cursor.h"
 #include "native_input.h"
 #include "native_keymap.h"
 #include "native_shm.h"

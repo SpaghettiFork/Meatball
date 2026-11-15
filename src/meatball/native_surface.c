@@ -74,8 +74,8 @@ frame_ready (void *data)
     MbSurface *node;
 
     surface->frame_timer_armed = FALSE;
-    if (!window || !window->realized || !surface->pixels ||
-        mb_subsurface_root (surface) != surface)
+    if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
+        !surface->pixels || mb_subsurface_root (surface) != surface)
         return 0;
     while ((node = mb_scene_next (&iterator)))
     {
@@ -101,7 +101,8 @@ redraw (MbSurface *surface)
         return TRUE;
     window = mb_window_get (&surface->window, DixGetAttrAccess);
 
-    if (!window || !window->realized || !surface->pixels)
+    if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
+        !surface->pixels)
         return TRUE;
     if (!mb_surface_redraw (surface))
         return FALSE;
@@ -643,6 +644,8 @@ mb_surface_update (MbSurface *surface)
         surface->scene_x = x1;
         surface->scene_y = y1;
     }
+    if (!mb_input_cursor_changed (surface))
+        goto fail;
     surface->offset_x = surface->offset_y = 0;
     if (!apply_input (surface, native))
         goto fail;

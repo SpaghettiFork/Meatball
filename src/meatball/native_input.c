@@ -77,6 +77,10 @@ struct MbSeat
     int32_t root_x, root_y;
     double root_pointer_x, root_pointer_y;
     struct Modifiers modifiers;
+    MbSurface *cursor_surface;
+    uint64_t cursor_owner;
+    XID cursor;
+    int64_t hotspot_x, hotspot_y;
 };
 
 struct InputResource
@@ -203,9 +207,117 @@ send_keyboard_enter (struct InputResource *input, uint32_t serial)
 }
 
 static void
-set_cursor (struct wl_client *client, struct wl_resource *resource,
-            uint32_t serial, struct wl_resource *surface, int32_t x, int32_t y)
+clear_cursor (struct MbSeat *seat)
 {
+    if (seat->cursor && mb_client_lookup (seat->cursor_owner))
+        FreeResource (seat->cursor, RT_NONE);
+    seat->cursor = None;
+    seat->cursor_owner = 0;
+    seat->cursor_surface = NULL;
+}
+
+static Bool
+update_cursor (struct MbSeat *seat)
+{
+    MbClient *client = mb_client_lookup (seat->cursor_owner);
+    MbSurface *root;
+    WindowPtr window;
+    DeviceIntPtr pointer;
+    CursorPtr cursor;
+
+    if (!client || !seat->pointer_focus ||
+        seat->pointer_focus->client != client || seat->removed)
+        return TRUE;
+    root = mb_subsurface_root (seat->pointer_focus);
+    if (!root)
+        return TRUE;
+    window = mb_window_get (&root->window, DixSetAttrAccess);
+    if (!window || dixLookupDevice (&pointer, seat->pointer_id, client->native,
+                                    DixUseAccess) != Success)
+        return FALSE;
+    cursor = mb_cursor_create (client, seat->cursor_surface, seat->hotspot_x,
+                               seat->hotspot_y);
+    if (!cursor)
+        return FALSE;
+    if (ChangeWindowDeviceCursor (window, pointer, cursor) != Success)
+    {
+        FreeResource (cursor->id, RT_NONE);
+        return FALSE;
+    }
+    if (seat->cursor)
+        FreeResource (seat->cursor, RT_NONE);
+    seat->cursor = cursor->id;
+    return TRUE;
+}
+
+static void
+set_cursor (struct wl_client *client, struct wl_resource *resource,
+            uint32_t serial, struct wl_resource *surface_resource, int32_t x,
+            int32_t y)
+{
+    struct InputResource *input = wl_resource_get_user_data (resource);
+    struct MbSeat *seat = input->seat;
+    MbSurface *surface =
+        surface_resource ? wl_resource_get_user_data (surface_resource) : NULL;
+
+    if (!seat->pointer_focus || seat->pointer_focus->client != input->client ||
+        serial != seat->enter_serial)
+        return;
+    if (surface && surface->role != MB_ROLE_NONE &&
+        surface->role != MB_ROLE_CURSOR)
+    {
+        wl_resource_post_error (resource, WL_POINTER_ERROR_ROLE,
+                                "cursor surface already has a role");
+        return;
+    }
+    clear_cursor (seat);
+    seat->cursor_owner = input->client->lifetime;
+    seat->cursor_surface = surface;
+    seat->hotspot_x = x;
+    seat->hotspot_y = y;
+    if (surface)
+    {
+        surface->role = MB_ROLE_CURSOR;
+        mb_surface_update (surface);
+    }
+    else if (!update_cursor (seat))
+        wl_resource_post_no_memory (resource);
+}
+
+Bool
+mb_input_cursor_visible (MbSurface *surface)
+{
+    struct MbSeat *seat;
+
+    if (!compositor.input)
+        return FALSE;
+    wl_list_for_each (seat, &compositor.input->seats, link)
+    {
+        if (!seat->removed && seat->cursor_surface == surface &&
+            seat->pointer_focus &&
+            seat->pointer_focus->client == surface->client)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+Bool
+mb_input_cursor_changed (MbSurface *surface)
+{
+    struct MbSeat *seat;
+
+    if (!compositor.input || surface->role != MB_ROLE_CURSOR)
+        return TRUE;
+    wl_list_for_each (seat, &compositor.input->seats, link)
+    {
+        if (seat->cursor_surface != surface)
+            continue;
+        seat->hotspot_x -= surface->offset_x;
+        seat->hotspot_y -= surface->offset_y;
+        if (!update_cursor (seat))
+            return FALSE;
+    }
+    return TRUE;
 }
 
 static const struct wl_pointer_interface pointer_implementation = {
@@ -362,6 +474,10 @@ pointer_focus (struct MbSeat *seat, MbSurface *surface, wl_fixed_t x,
     }
     seat->pointer_focus = surface;
     seat->enter_serial = serial;
+    if (!surface || surface->client->lifetime != seat->cursor_owner)
+        clear_cursor (seat);
+    else if (!update_cursor (seat))
+        wl_resource_post_no_memory (surface->resource);
 }
 
 static void
@@ -1200,6 +1316,8 @@ mb_input_surface_destroyed (MbSurface *surface)
         return;
     wl_list_for_each (seat, &compositor.input->seats, link)
     {
+        if (seat->cursor_surface == surface)
+            clear_cursor (seat);
         if (seat->pointer_root == surface || seat->pointer_focus == surface ||
             seat->grab_focus == surface)
         {
@@ -1283,6 +1401,7 @@ mb_input_shutdown (void)
     {
         struct InputResource *resource, *next_resource;
 
+        clear_cursor (seat);
         wl_global_destroy (seat->global);
         wl_list_for_each_safe (resource, next_resource, &seat->resources, link)
         {
