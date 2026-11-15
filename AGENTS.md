@@ -46,6 +46,9 @@ permission to create local Unix sockets.
 `native-loop` checks Wayland round trips alongside X11 traffic and a client
 that leaves replies unread. `native-scheduler` exercises Wayland idle handlers,
 timers, pipe reads, hangups, and source removal inside the server loop.
+`native-clients` checks credentials, native resource ownership, X11
+`KillClient`, deferred replies and events, FD transfer and cleanup, exceptional
+clients, and lifetime identifiers across disconnects and resets.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.

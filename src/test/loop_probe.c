@@ -1,18 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "server.h"
+#include "probe.h"
 
 #include <assert.h>
 #include <errno.h>
-#include <extension.h>
-#include <extnsionst.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <xf86Module.h>
 
-#define PROBE_EXTENSION "MEATBALL_LOOP_PROBE"
-#define SOCKET_PATH_ENV "MEATBALL_TEST_SOCKET"
 #define RESULT_PATH_ENV "MEATBALL_TEST_RESULT"
 #define TIMER_DELAY_MS 1
 #define TIMER_TICKS 3
@@ -80,21 +75,9 @@ probe_idle (void *data)
     idle_ran = TRUE;
 }
 
-static void
-probe_wakeup (void *data, int result)
+void
+mb_probe_start (void)
 {
-}
-
-static void
-probe_start (void *data, void *timeout)
-{
-    struct meatball_config config = {
-        .socket_path = getenv (SOCKET_PATH_ENV),
-        .socket_mode = MEATBALL_DEFAULT_SOCKET_MODE,
-    };
-
-    RemoveBlockAndWakeupHandlers (probe_start, probe_wakeup, NULL);
-    assert (meatball_initialize (&config));
     assert (pipe2 (pipe_fds, O_NONBLOCK | O_CLOEXEC) == 0);
     read_source = wl_event_loop_add_fd (compositor.wl_event_loop, pipe_fds[0],
                                         WL_EVENT_READABLE, probe_read, NULL);
@@ -106,8 +89,8 @@ probe_start (void *data, void *timeout)
     assert (wl_event_source_timer_update (timer_source, TIMER_DELAY_MS) == 0);
 }
 
-static void
-probe_reset (ExtensionEntry *extension)
+void
+mb_probe_stop (void)
 {
     unsigned int i;
 
@@ -122,46 +105,4 @@ probe_reset (ExtensionEntry *extension)
             close (pipe_fds[i]);
         pipe_fds[i] = PIPE_CLOSED;
     }
-    meatball_shutdown ();
 }
-
-static int
-probe_request (ClientPtr client)
-{
-    return BadRequest;
-}
-
-static void
-probe_initialize (void)
-{
-    assert (AddExtension (PROBE_EXTENSION, 0, 0, probe_request, probe_request,
-                          probe_reset, StandardMinorOpcode));
-    assert (RegisterBlockAndWakeupHandlers (probe_start, probe_wakeup, NULL));
-}
-
-static void *
-probe_setup (void *module, void *opts, int *errmaj, int *errmin)
-{
-    static const ExtensionModule extension = {
-        .initFunc = probe_initialize,
-        .name = PROBE_EXTENSION,
-    };
-
-    LoadExtensionList (&extension, 1, FALSE);
-    return module;
-}
-
-static XF86ModuleVersionInfo version = {
-    .modname = "meatball-loop-probe",
-    .vendor = "Spaghetti Fork",
-    ._modinfo1_ = MODINFOSTRING1,
-    ._modinfo2_ = MODINFOSTRING2,
-    .xf86version = XORG_VERSION_CURRENT,
-    .abiclass = ABI_CLASS_EXTENSION,
-    .abiversion = ABI_EXTENSION_VERSION,
-};
-
-_X_EXPORT XF86ModuleData sauceModuleData = {
-    .vers = &version,
-    .setup = probe_setup,
-};

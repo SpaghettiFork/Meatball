@@ -58,12 +58,25 @@ class Wayland:
         registry, callback = self.allocate_id(), self.allocate_id()
         self.send(WAYLAND_DISPLAY_ID, DISPLAY_GET_REGISTRY, struct.pack("=I", registry))
         self.send(WAYLAND_DISPLAY_ID, DISPLAY_SYNC, struct.pack("=I", callback))
-        globals_found = set()
+        self.registry_id = registry
+        globals_found = {}
         while True:
             object_id, opcode, payload = self.receive()
             if object_id == callback:
                 assert opcode == CALLBACK_DONE
                 return globals_found
             if object_id == registry and opcode == REGISTRY_GLOBAL:
-                _, length = struct.unpack_from("=II", payload)
-                globals_found.add(payload[8:8 + length - 1].decode("ascii"))
+                name, length = struct.unpack_from("=II", payload)
+                version_offset = 8 + ((length + 3) & ~3)
+                version, = struct.unpack_from("=I", payload, version_offset)
+                globals_found[payload[8:8 + length - 1].decode("ascii")] = (name, version)
+
+    def bind(self, interface):
+        globals_found = self.globals()
+        name, version = globals_found[interface]
+        object_id = self.allocate_id()
+        encoded = interface.encode("ascii") + b"\0"
+        padded = encoded + bytes(-len(encoded) % 4)
+        self.send(self.registry_id, 0, struct.pack("=II", name, len(encoded))
+                  + padded + struct.pack("=II", version, object_id))
+        return object_id
