@@ -96,7 +96,8 @@ meatball_initialize (const struct meatball_config *config)
     if (chmod (socket_fd_path, config->socket_mode) < 0)
         goto fail;
     if (!mb_windows_initialize () || !mb_clients_initialize () ||
-        !mb_surfaces_initialize () || !mb_loop_initialize ())
+        !mb_surfaces_initialize () || !mb_shm_initialize () ||
+        !mb_loop_initialize ())
         goto fail;
     close (socket_fd);
     free (socket_fd_path);
@@ -116,6 +117,7 @@ void
 meatball_shutdown (void)
 {
     mb_loop_shutdown ();
+    mb_shm_shutdown ();
     mb_surfaces_shutdown ();
     mb_clients_shutdown ();
     if (compositor.wl_display)

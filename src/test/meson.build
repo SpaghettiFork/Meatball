@@ -29,6 +29,9 @@ if spaghetti_build_dir != ''
     test('native-surfaces', python,
          args: ['-B', files('native_surfaces.py'), test_host, sauce],
          timeout: 30)
+    test('native-shm', python,
+         args: ['-B', files('native_shm.py'), test_host, sauce],
+         timeout: 30)
     loop_probe = shared_module('meatball-loop-probe', ['probe.c', 'loop_probe.c'],
                                dependencies: [common_dep, meatball_headers],
                                c_args: ['-UNDEBUG'],
@@ -50,6 +53,14 @@ if spaghetti_build_dir != ''
                                  link_with: meatball)
     test('native-socket', python,
          args: ['-B', files('native_socket.py'), test_host, socket_probe],
+         timeout: 30)
+    shm_fault_probe = shared_module('meatball-shm-fault-probe', ['probe.c', 'shm_fault_probe.c'],
+                                    dependencies: [common_dep, meatball_headers],
+                                    c_args: ['-UNDEBUG'],
+                                    link_args: ['-Wl,--wrap=shm_create_pixmap_from_fd'],
+                                    link_with: meatball)
+    test('native-shm-fault', python,
+         args: ['-B', files('native_shm.py'), test_host, shm_fault_probe, '--fault'],
          timeout: 30)
 else
     message('Set spaghetti_build_dir to enable the isolated module test host')

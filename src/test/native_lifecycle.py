@@ -113,6 +113,16 @@ def check_configuration(host, module, directory):
     assert not path.exists()
 
 
+def check_capabilities(host, module, directory):
+    for extension in ["MIT-SHM", "RENDER"]:
+        path = directory / "disabled"
+        with server(host, module, {"MEATBALL_TEST_SOCKET": str(path)},
+                    arguments=["-extension", extension]) as (_, display):
+            with connect_x11(display) as connection:
+                check_extension(connection)
+            assert not path.exists(), f"Meatball started without {extension}"
+
+
 def main():
     host, module = sys.argv[1:3]
     with tempfile.TemporaryDirectory(prefix="meatball-native-") as directory:
@@ -121,6 +131,7 @@ def main():
         check_failed_start(host, module, root / "missing" / "wayland")
         check_conflict(host, module, root / "wayland")
         check_configuration(host, module, root)
+        check_capabilities(host, module, root)
 
 
 if __name__ == "__main__":

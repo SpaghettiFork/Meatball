@@ -4,9 +4,15 @@
 
 #include <X11/extensions/shapeconst.h>
 #include <limits.h>
+#include <pixmapstr.h>
 #include <stdlib.h>
 #include <wayland-server-protocol.h>
 #include <window.h>
+
+#define FRAME_DELAY_MS 16
+#define SEND_EVENT_MASK 0x80
+
+static Bool apply_input (MbSurface *surface, WindowPtr native);
 
 struct Frame
 {
@@ -24,11 +30,113 @@ frame_destroyed (struct wl_resource *resource)
 }
 
 static void
+free_pixels (MbSurface *surface)
+{
+    PixmapPtr pixels;
+
+    if (surface->pixels && surface->client->native &&
+        dixLookupResourceByType ((void **)&pixels, surface->pixels, RT_PIXMAP,
+                                 surface->client->native,
+                                 DixDestroyAccess) == Success)
+        FreeResource (surface->pixels, RT_NONE);
+    surface->pixels = None;
+}
+
+static int
+frame_ready (void *data)
+{
+    MbSurface *surface = data;
+    struct Frame *frame, *next;
+    WindowPtr window = mb_window_get (&surface->window, DixGetAttrAccess);
+
+    surface->frame_timer_armed = FALSE;
+    if (!window || !window->realized || !surface->pixels)
+        return 0;
+    wl_list_for_each_safe (frame, next, &surface->frames, link)
+    {
+        wl_callback_send_done (frame->resource, GetTimeInMillis ());
+        wl_resource_destroy (frame->resource);
+    }
+    return 0;
+}
+
+static Bool
+redraw (MbSurface *surface)
+{
+    WindowPtr window = mb_window_get (&surface->window, DixGetAttrAccess);
+
+    if (!window || !window->realized || !surface->pixels)
+        return TRUE;
+    if (!mb_surface_redraw (surface))
+        return FALSE;
+    if (!surface->frame_timer_armed && !wl_list_empty (&surface->frames))
+    {
+        if (!surface->frame_timer)
+            surface->frame_timer = wl_event_loop_add_timer (
+                compositor.wl_event_loop, frame_ready, surface);
+        if (!surface->frame_timer ||
+            wl_event_source_timer_update (surface->frame_timer,
+                                          FRAME_DELAY_MS) < 0)
+            return FALSE;
+        surface->frame_timer_armed = TRUE;
+    }
+    return TRUE;
+}
+
+static void
+surface_output (MbClient *client, const void *message, size_t size)
+{
+    const xEvent *event = message;
+    MbSurface *surface;
+    XID window;
+
+    if (size != sizeof (*event))
+        return;
+    switch (event->u.u.type & ~SEND_EVENT_MASK)
+    {
+    case Expose:
+        if (event->u.expose.count)
+            return;
+        window = event->u.expose.window;
+        break;
+    case ConfigureNotify:
+        window = event->u.configureNotify.window;
+        break;
+    default:
+        return;
+    }
+    wl_list_for_each (surface, &compositor.surfaces, link)
+    {
+        if (surface->client == client && surface->window.id == window)
+        {
+            WindowPtr native =
+                mb_window_get (&surface->window, DixSetAttrAccess);
+
+            if (native && !apply_input (surface, native))
+            {
+                wl_resource_post_no_memory (surface->resource);
+                return;
+            }
+            if (!redraw (surface))
+                wl_resource_post_no_memory (surface->resource);
+            return;
+        }
+    }
+}
+
+static void
 surface_destroyed (struct wl_resource *resource)
 {
     MbSurface *surface = wl_resource_get_user_data (resource);
     struct Frame *frame, *next;
 
+    if (surface->frame_timer)
+        wl_event_source_remove (surface->frame_timer);
+    if (surface->pending_buffer)
+        mb_shm_buffer_unref (surface->pending_buffer);
+    if (surface->buffer)
+        mb_shm_buffer_unref (surface->buffer);
+    free_pixels (surface);
     mb_window_destroy (&surface->window);
     wl_list_for_each_safe (frame, next, &surface->pending_frames, link)
     {
@@ -56,20 +164,30 @@ surface_attach (struct wl_client *client, struct wl_resource *resource,
 {
     MbSurface *surface = wl_resource_get_user_data (resource);
 
-    if (buffer)
+    MbShmBuffer *shm = buffer ? mb_shm_buffer_acquire (buffer) : NULL;
+
+    if (buffer && !shm)
     {
         wl_client_post_implementation_error (
             client, "unsupported buffer implementation");
         return;
     }
-    surface->detach_pending = TRUE;
+    if (surface->pending_buffer)
+        mb_shm_buffer_unref (surface->pending_buffer);
+    surface->pending_buffer = shm;
+    surface->pending_x = x;
+    surface->pending_y = y;
+    surface->attach_pending = TRUE;
 }
 
 static void
 surface_damage (struct wl_client *client, struct wl_resource *resource,
                 int32_t x, int32_t y, int32_t width, int32_t height)
 {
-    /* Rendering consumes the complete buffer. */
+    MbSurface *surface = wl_resource_get_user_data (resource);
+
+    if (width > 0 && height > 0)
+        surface->damage_pending = TRUE;
 }
 
 static void
@@ -188,15 +306,78 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
         surface->input_default = surface->pending_input_default;
         surface->input_changed = FALSE;
     }
+    if (surface->attach_pending ||
+        (surface->damage_pending && surface->buffer &&
+         surface->buffer->resource))
+    {
+        Bool attached = surface->attach_pending;
+
+        if (attached)
+        {
+            if (surface->buffer)
+                mb_shm_buffer_unref (surface->buffer);
+            surface->buffer = surface->pending_buffer;
+            surface->pending_buffer = NULL;
+            surface->attach_pending = FALSE;
+        }
+        if (surface->buffer)
+        {
+            PixmapPtr copy =
+                mb_shm_snapshot (surface->buffer, surface->window.screen);
+            XID id;
+            XID values[4];
+            Mask mask = CWWidth | CWHeight;
+            unsigned int count = 0;
+
+            if (!copy)
+                goto fail;
+            id = FakeClientID (surface->client->native->index);
+            copy->drawable.id = id;
+            if (!AddResource (id, RT_PIXMAP, copy))
+                goto fail;
+            free_pixels (surface);
+            surface->pixels = id;
+            surface->width = surface->buffer->width;
+            surface->height = surface->buffer->height;
+            if (attached && (surface->pending_x || surface->pending_y))
+            {
+                int64_t x = (int64_t)native->origin.x + surface->pending_x;
+                int64_t y = (int64_t)native->origin.y + surface->pending_y;
+
+                if (x < INT16_MIN || x > INT16_MAX ||
+                    y < INT16_MIN || y > INT16_MAX)
+                {
+                    wl_resource_post_error (
+                        resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                        "buffer offset exceeds native coordinates");
+                    return;
+                }
+                values[count++] = (INT32)x;
+                values[count++] = (INT32)y;
+                mask |= CWX | CWY;
+            }
+            values[count++] = surface->width;
+            values[count++] = surface->height;
+            if (ConfigureWindow (native, mask, values,
+                                 surface->client->native) != Success)
+                goto fail;
+            if (surface->buffer->resource)
+                wl_buffer_send_release (surface->buffer->resource);
+        }
+        else
+        {
+            free_pixels (surface);
+            surface->width = surface->height = 0;
+            UnmapWindow (native, FALSE);
+        }
+    }
+    surface->damage_pending = FALSE;
     if (!apply_input (surface, native))
         goto fail;
-    if (surface->detach_pending)
-    {
-        UnmapWindow (native, FALSE);
-        surface->detach_pending = FALSE;
-    }
     wl_list_insert_list (surface->frames.prev, &surface->pending_frames);
     wl_list_init (&surface->pending_frames);
+    if (!redraw (surface))
+        goto fail;
     return;
 
 fail:
@@ -247,6 +428,8 @@ create_surface (struct wl_client *client, struct wl_resource *resource,
         wl_resource_destroy (surface->resource);
         wl_resource_post_no_memory (resource);
     }
+    else
+        owner->output = surface_output;
 }
 
 static void

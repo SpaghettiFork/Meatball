@@ -15,8 +15,9 @@ support from that DDX.
 
 The native module currently handles core Wayland requests and version 1
 `wl_compositor` surfaces on Spaghetti's server thread, with native window
-ownership and committed input regions. Buffer rendering, shell roles, and
-Wayland input are being ported and remain unavailable.
+ownership and committed input regions. SHM buffers use native imports and
+Render with an independent server copy for redraws. Shell roles and Wayland
+input are being ported and remain unavailable.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
@@ -57,6 +58,9 @@ clients, and lifetime identifiers across disconnects and resets.
 that ownership and mode changes apply to the original socket inode.
 `native-surfaces` checks surface windows, copied input regions, pending
 callbacks, destruction, and reset cleanup.
+`native-shm` checks imports, wide strides, buffer release, pixel readback, and
+redraws after the client reuses its storage. `native-shm-fault` truncates an
+imported file during rendering to exercise Spaghetti's SIGBUS handling.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.
