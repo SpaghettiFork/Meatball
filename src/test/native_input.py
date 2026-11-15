@@ -46,6 +46,20 @@ SURFACE_INPUT = 5
 COMMIT = 6
 KEY_A = 30
 KEY_LEFTSHIFT = 42
+KEY_CAPSLOCK = 58
+LOCK_MASK = 2
+PEER_WINDOW_ORIGIN = 96
+XKB_EXTENSION_NAME = "XKEYBOARD"
+XKB_USE_EXTENSION = 0
+XKB_SET_CONTROLS = 7
+XKB_USE_CORE_KEYBOARD = 0x0100
+XKB_REPEAT_KEYS = 1 << 0
+XKB_SET_CONTROLS_SIZE = 100
+XKB_CONTROLS_MASK_OFFSET = 24
+XKB_REPEAT_OFFSET = 36
+TEST_REPEAT_RATE = 50
+TEST_REPEAT_INTERVAL = 20
+TEST_REPEAT_DELAY = 300
 KEYCODE_OFFSET = 8
 BTN_LEFT = 0x110
 SHIFT_MASK = 1
@@ -75,6 +89,10 @@ class XInput:
         self.root = root
         self.xtest = extension(connection, "XTEST")
         self.xi = extension(connection, "XInputExtension")
+        self.xkb = extension(connection, XKB_EXTENSION_NAME)
+        self.connection.sendall(struct.pack("<BBHHH", self.xkb, XKB_USE_EXTENSION, 2, 1, 0))
+        reply = receive_exact(self.connection, X11_REPLY_SIZE)
+        assert reply[0] == 1 and reply[1], reply.hex()
 
     def fake(self, type, detail=0, x=0, y=0, device=0):
         self.connection.sendall(struct.pack("<BBHBBHIIIIhhIHBB", self.xtest, XTEST_FAKE_INPUT,
@@ -100,6 +118,17 @@ class XInput:
 
     def client_pointer(self, pointer):
         self.connection.sendall(struct.pack("<BBHIHH", self.xi, XI_SET_CLIENT_POINTER, 3, 0, pointer, 0))
+        self.sync()
+
+    def repeat(self, enabled):
+        request = bytearray(XKB_SET_CONTROLS_SIZE)
+        struct.pack_into("<BBHH", request, 0, self.xkb, XKB_SET_CONTROLS,
+                         XKB_SET_CONTROLS_SIZE // 4, XKB_USE_CORE_KEYBOARD)
+        struct.pack_into("<III", request, XKB_CONTROLS_MASK_OFFSET,
+                         XKB_REPEAT_KEYS, XKB_REPEAT_KEYS if enabled else 0, XKB_REPEAT_KEYS)
+        struct.pack_into("<HH", request, XKB_REPEAT_OFFSET,
+                         TEST_REPEAT_DELAY, TEST_REPEAT_INTERVAL)
+        self.connection.sendall(request)
         self.sync()
 
     def sync(self):
@@ -190,6 +219,25 @@ def check_input(path, x11, root):
         actor.focus(window)
         data, _ = client.until(client.keyboard, KEYBOARD_ENTER)
         assert struct.unpack_from("=II", data)[1] == client.surface
+        for enabled, expected_rate in ((True, TEST_REPEAT_RATE), (False, 0),
+                                        (True, TEST_REPEAT_RATE)):
+            actor.repeat(enabled)
+            data, _ = client.until(client.keyboard, KEYBOARD_REPEAT)
+            assert struct.unpack("=ii", data) == (expected_rate, TEST_REPEAT_DELAY)
+        for type in (KEY_PRESS, KEY_RELEASE):
+            actor.fake(type, KEY_CAPSLOCK + KEYCODE_OFFSET)
+        while True:
+            data, _ = client.until(client.keyboard, KEYBOARD_MODIFIERS)
+            if struct.unpack("=IIIII", data)[3] & LOCK_MASK:
+                break
+        client.sync()
+        for type in (KEY_PRESS, KEY_RELEASE):
+            actor.fake(type, KEY_CAPSLOCK + KEYCODE_OFFSET)
+        while True:
+            data, _ = client.until(client.keyboard, KEYBOARD_MODIFIERS)
+            if struct.unpack("=IIIII", data)[3] == 0:
+                break
+        client.sync()
         for type, key in ((KEY_PRESS, KEY_LEFTSHIFT), (KEY_PRESS, KEY_A),
                           (KEY_RELEASE, KEY_A), (KEY_RELEASE, KEY_LEFTSHIFT)):
             actor.fake(type, key + KEYCODE_OFFSET)
@@ -228,6 +276,16 @@ def check_input(path, x11, root):
         client.commit()
         data, _ = client.until(client.pointer, POINTER_ENTER)
         assert struct.unpack("=IIii", data)[1] == client.surface
+        client.send(surface, SURFACE_INPUT, struct.pack("=I", 0))
+        client.send(surface, COMMIT)
+        client.commit()
+        client.until(client.pointer, POINTER_ENTER)
+        actor.fake(BUTTON_PRESS, 1)
+        client.until(client.pointer, POINTER_BUTTON)
+        client.send(surface, 0)
+        data, _ = client.until(client.pointer, POINTER_ENTER)
+        assert struct.unpack("=IIii", data)[1] == client.surface
+        actor.fake(BUTTON_RELEASE, 1)
         original_seat = client.globals()["wl_seat"][0]
         for _ in range(2):
             actor.add_master()
@@ -270,7 +328,7 @@ def check_input(path, x11, root):
         peer = InputClient(path)
         try:
             peer_window, = query_tree(x11, root) - before
-            map_window(peer, x11, root, window=peer_window, origin=96)
+            map_window(peer, x11, root, window=peer_window, origin=PEER_WINDOW_ORIGIN)
             actor.focus(window)
             actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)
             client.until(client.keyboard, KEYBOARD_KEY)
@@ -285,7 +343,7 @@ def check_input(path, x11, root):
             events = client.roundtrip_events()
             assert not any(object_id == client.keyboard and opcode == KEYBOARD_KEY
                            for object_id, opcode, _ in events)
-            actor.fake(MOTION, x=101, y=WINDOW_ORIGIN + 7)
+            actor.fake(MOTION, x=PEER_WINDOW_ORIGIN + 5, y=WINDOW_ORIGIN + 7)
             peer.until(peer.pointer, POINTER_ENTER)
             actor.fake(BUTTON_PRESS, 1)
             peer.until(peer.pointer, POINTER_BUTTON)

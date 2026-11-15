@@ -1359,7 +1359,9 @@ mb_input_surface_destroyed (MbSurface *surface)
             seat->grab_focus == surface)
         {
             pointer_focus (seat, NULL, 0, 0);
-            seat->grab_focus = seat->pointer_root = NULL;
+            seat->grab_focus = NULL;
+            if (seat->pointer_root == surface)
+                seat->pointer_root = NULL;
             seat->button_count = 0;
             memset (seat->buttons, 0, sizeof (seat->buttons));
         }
