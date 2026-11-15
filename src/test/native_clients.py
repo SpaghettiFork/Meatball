@@ -69,14 +69,6 @@ class TestClient(Wayland):
         self.exercise(LOOKUP, lifetime >> U32_BITS, lifetime & 0xffffffff)
         return self.result()
 
-    def disconnected(self):
-        try:
-            while self.connection.recv(X11_REPLY_SIZE):
-                pass
-        except ConnectionResetError:
-            pass
-
-
 def geometry(x11, resource, exists):
     x11.sendall(struct.pack("<BBHI", GET_GEOMETRY, 0, 2, resource))
     reply = receive_exact(x11, X11_REPLY_SIZE)

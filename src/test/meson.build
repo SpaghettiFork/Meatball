@@ -26,6 +26,9 @@ if spaghetti_build_dir != ''
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)
+    test('native-surfaces', python,
+         args: ['-B', files('native_surfaces.py'), test_host, sauce],
+         timeout: 30)
     loop_probe = shared_module('meatball-loop-probe', ['probe.c', 'loop_probe.c'],
                                dependencies: [common_dep, meatball_headers],
                                c_args: ['-UNDEBUG'],
