@@ -30,16 +30,34 @@ frame_destroyed (struct wl_resource *resource)
 }
 
 static void
-free_pixels (MbSurface *surface)
+content_unref (MbSurface *surface, MbSurfaceContent *content)
 {
     PixmapPtr pixels;
 
-    if (surface->pixels && surface->client->native &&
-        dixLookupResourceByType ((void **)&pixels, surface->pixels, RT_PIXMAP,
+    if (!content || --content->refs)
+        return;
+    if (content->pixels && surface->client->native &&
+        dixLookupResourceByType ((void **)&pixels, content->pixels, RT_PIXMAP,
                                  surface->client->native,
                                  DixDestroyAccess) == Success)
-        FreeResource (surface->pixels, RT_NONE);
-    surface->pixels = None;
+        FreeResource (content->pixels, RT_NONE);
+    mb_shm_buffer_unref (content->buffer);
+    free (content);
+}
+
+void
+mb_surface_commit_free (MbSurfaceCommit *commit)
+{
+    struct Frame *frame, *next;
+
+    wl_list_for_each_safe (frame, next, &commit->frames, link)
+    {
+        wl_resource_destroy (frame->resource);
+    }
+    content_unref (commit->surface, commit->content);
+    pixman_region32_fini (&commit->input);
+    wl_list_remove (&commit->link);
+    free (commit);
 }
 
 static int
@@ -136,6 +154,7 @@ surface_destroyed (struct wl_resource *resource)
 {
     MbSurface *surface = wl_resource_get_user_data (resource);
     struct Frame *frame, *next;
+    MbSurfaceCommit *commit, *next_commit;
 
     mb_xdg_surface_destroyed (surface);
     mb_viewport_surface_destroyed (surface);
@@ -143,9 +162,11 @@ surface_destroyed (struct wl_resource *resource)
         wl_event_source_remove (surface->frame_timer);
     if (surface->pending_buffer)
         mb_shm_buffer_unref (surface->pending_buffer);
-    if (surface->buffer)
-        mb_shm_buffer_unref (surface->buffer);
-    free_pixels (surface);
+    wl_list_for_each_safe (commit, next_commit, &surface->commits, link)
+    {
+        mb_surface_commit_free (commit);
+    }
+    content_unref (surface, surface->content);
     mb_window_destroy (&surface->window);
     wl_list_for_each_safe (frame, next, &surface->pending_frames, link)
     {
@@ -332,17 +353,22 @@ apply_input (MbSurface *surface, WindowPtr native)
     return TRUE;
 }
 
-static void
-surface_commit (struct wl_client *client, struct wl_resource *resource)
+static MbSurfaceCommit *
+capture_commit (MbSurface *surface)
 {
-    MbSurface *surface = wl_resource_get_user_data (resource);
-    WindowPtr native = mb_window_get (&surface->window, DixSetAttrAccess);
-    MbShmBuffer *buffer =
-        surface->attach_pending ? surface->pending_buffer : surface->buffer;
+    MbSurfaceCommit *previous =
+        wl_list_empty (&surface->commits)
+            ? NULL
+            : wl_container_of (surface->commits.prev, previous, link);
+    MbSurfaceContent *content =
+        previous ? previous->content : surface->content;
+    MbShmBuffer *buffer = content ? content->buffer : NULL;
+    pixman_region32_t *input = previous ? &previous->input : &surface->input;
+    MbSurfaceCommit *commit;
     int32_t width = 0, height = 0;
-    Bool offset = surface->attach_pending && buffer &&
-                  (surface->pending_x || surface->pending_y);
 
+    if (surface->attach_pending)
+        buffer = surface->pending_buffer;
     if (buffer)
     {
         Bool rotated =
@@ -355,61 +381,128 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
             buffer->height % surface->pending_scale)
         {
             wl_resource_post_error (
-                resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                surface->resource, WL_SURFACE_ERROR_INVALID_SIZE,
                 "buffer dimensions must be multiples of scale");
-            return;
+            return NULL;
         }
         width = rotated ? buffer->height : buffer->width;
         height = rotated ? buffer->width : buffer->height;
     }
 
-    if (!native ||
-        !mb_viewport_size (surface, width, height, &width, &height) ||
+    if (!mb_viewport_size (surface, width, height, &width, &height) ||
         !mb_xdg_commit (surface))
-        return;
-    surface->crop = surface->pending_crop;
-    surface->scale = surface->pending_scale;
-    surface->transform = surface->pending_transform;
-    if (surface->input_changed)
+        return NULL;
+    commit = calloc (1, sizeof (*commit));
+    if (!commit)
     {
-        if (!pixman_region32_copy (&surface->input, &surface->pending_input))
-            goto fail;
-        surface->input_default = surface->pending_input_default;
-        surface->input_changed = FALSE;
+        wl_resource_post_no_memory (surface->resource);
+        return NULL;
     }
+    commit->surface = surface;
+    wl_list_init (&commit->link);
+    wl_list_init (&commit->frames);
+    pixman_region32_init (&commit->input);
+    if (surface->input_changed)
+        input = &surface->pending_input;
+    if (!pixman_region32_copy (&commit->input, input))
+        goto fail;
+    commit->input_default =
+        previous ? previous->input_default : surface->input_default;
+    if (surface->input_changed)
+        commit->input_default = surface->pending_input_default;
+    commit->crop = surface->pending_crop;
+    commit->scale = surface->pending_scale;
+    commit->transform = surface->pending_transform;
+    commit->width = width;
+    commit->height = height;
     if (surface->attach_pending)
     {
-        if (surface->buffer)
-            mb_shm_buffer_unref (surface->buffer);
-        surface->buffer = surface->pending_buffer;
-        surface->pending_buffer = NULL;
-        surface->attach_pending = FALSE;
-        if (surface->buffer)
+        if (buffer)
         {
-            PixmapPtr copy =
-                mb_shm_snapshot (surface->buffer, surface->window.screen);
+            PixmapPtr copy;
             XID id;
 
+            commit->content = calloc (1, sizeof (*commit->content));
+            if (!commit->content)
+                goto fail;
+            commit->content->refs = 1;
+            commit->content->buffer = buffer;
+            buffer->refs++;
+            copy = mb_shm_snapshot (buffer, surface->window.screen);
             if (!copy)
                 goto fail;
             id = FakeClientID (surface->client->native->index);
             copy->drawable.id = id;
             if (!AddResource (id, RT_PIXMAP, copy))
                 goto fail;
-            free_pixels (surface);
-            surface->pixels = id;
-            if (surface->buffer->resource)
-                wl_buffer_send_release (surface->buffer->resource);
+            commit->content->pixels = id;
+            commit->offset_x = surface->pending_x;
+            commit->offset_y = surface->pending_y;
+            if (buffer->resource)
+                wl_buffer_send_release (buffer->resource);
         }
-        else
-        {
-            free_pixels (surface);
-            surface->width = surface->height = 0;
-            UnmapWindow (native, FALSE);
-        }
+        if (surface->pending_buffer)
+            mb_shm_buffer_unref (surface->pending_buffer);
+        surface->pending_buffer = NULL;
+        surface->attach_pending = FALSE;
     }
-    if (surface->pixels &&
-        (offset || surface->width != width || surface->height != height))
+    else if (content)
+    {
+        content->refs++;
+        commit->content = content;
+    }
+    surface->input_changed = FALSE;
+    wl_list_insert_list (commit->frames.prev, &surface->pending_frames);
+    wl_list_init (&surface->pending_frames);
+    wl_list_insert (surface->commits.prev, &commit->link);
+    return commit;
+
+fail:
+    mb_surface_commit_free (commit);
+    wl_resource_post_no_memory (surface->resource);
+    return NULL;
+}
+
+void
+mb_surface_commit_apply (MbSurfaceCommit *commit)
+{
+    MbSurface *surface = commit->surface;
+
+    content_unref (surface, surface->content);
+    surface->content = commit->content;
+    commit->content = NULL;
+    surface->buffer = surface->content ? surface->content->buffer : NULL;
+    surface->pixels = surface->content ? surface->content->pixels : None;
+    pixman_region32_fini (&surface->input);
+    surface->input = commit->input;
+    pixman_region32_init (&commit->input);
+    surface->input_default = commit->input_default;
+    surface->crop = commit->crop;
+    surface->scale = commit->scale;
+    surface->transform = commit->transform;
+    surface->width = commit->width;
+    surface->height = commit->height;
+    surface->offset_x = commit->offset_x;
+    surface->offset_y = commit->offset_y;
+    wl_list_insert_list (surface->frames.prev, &commit->frames);
+    wl_list_init (&commit->frames);
+}
+
+Bool
+mb_surface_update (MbSurface *surface)
+{
+    WindowPtr native = mb_window_get (&surface->window, DixSetAttrAccess);
+    Bool offset = surface->offset_x || surface->offset_y;
+
+    if (!native)
+        return TRUE;
+    if (!surface->pixels)
+    {
+        surface->scene_width = surface->scene_height = 0;
+        UnmapWindow (native, FALSE);
+    }
+    else if (offset || surface->scene_width != surface->width ||
+             surface->scene_height != surface->height)
     {
         XID values[4];
         Mask mask = CWWidth | CWHeight;
@@ -417,40 +510,56 @@ surface_commit (struct wl_client *client, struct wl_resource *resource)
 
         if (offset)
         {
-            int64_t x = (int64_t)native->origin.x + surface->pending_x;
-            int64_t y = (int64_t)native->origin.y + surface->pending_y;
+            int64_t x = (int64_t)native->origin.x + surface->offset_x;
+            int64_t y = (int64_t)native->origin.y + surface->offset_y;
 
             if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
                 y > INT16_MAX)
             {
                 wl_resource_post_error (
-                    resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                    surface->resource, WL_SURFACE_ERROR_INVALID_SIZE,
                     "buffer offset exceeds native coordinates");
-                return;
+                return FALSE;
             }
             values[count++] = (INT32)x;
             values[count++] = (INT32)y;
             mask |= CWX | CWY;
         }
-        values[count++] = width;
-        values[count++] = height;
+        values[count++] = surface->width;
+        values[count++] = surface->height;
 
         if (ConfigureWindow (native, mask, values, surface->client->native) !=
             Success)
             goto fail;
+        surface->scene_width = surface->width;
+        surface->scene_height = surface->height;
     }
-    surface->width = width;
-    surface->height = height;
+    surface->offset_x = surface->offset_y = 0;
     if (!apply_input (surface, native))
         goto fail;
-    wl_list_insert_list (surface->frames.prev, &surface->pending_frames);
-    wl_list_init (&surface->pending_frames);
     if (!mb_xdg_map (surface) || !redraw (surface))
         goto fail;
-    return;
+    return TRUE;
 
 fail:
-    wl_resource_post_no_memory (resource);
+    wl_resource_post_no_memory (surface->resource);
+    return FALSE;
+}
+
+static void
+surface_commit (struct wl_client *client, struct wl_resource *resource)
+{
+    MbSurface *surface = wl_resource_get_user_data (resource);
+    MbSurfaceCommit *commit;
+
+    if (!mb_window_get (&surface->window, DixSetAttrAccess))
+        return;
+    commit = capture_commit (surface);
+    if (!commit)
+        return;
+    mb_surface_commit_apply (commit);
+    mb_surface_commit_free (commit);
+    mb_surface_update (surface);
 }
 
 static const struct wl_surface_interface surface_implementation = {
@@ -491,6 +600,7 @@ create_surface (struct wl_client *client, struct wl_resource *resource,
     surface->input_default = surface->pending_input_default = TRUE;
     wl_list_init (&surface->pending_frames);
     wl_list_init (&surface->frames);
+    wl_list_init (&surface->commits);
     pixman_region32_init (&surface->input);
     pixman_region32_init (&surface->pending_input);
     wl_list_insert (compositor.surfaces.prev, &surface->link);
