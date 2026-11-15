@@ -38,6 +38,7 @@ mb_windows_initialize (void)
         { "UTF8_STRING", &compositor.atoms.utf8_string },
         { "_NET_WM_PID", &compositor.atoms.net_wm_pid },
         { "_NET_WM_STATE", &compositor.atoms.net_wm_state },
+        { "_NET_WM_MOVERESIZE", &compositor.atoms.net_wm_moveresize },
         { "_NET_WM_STATE_FULLSCREEN", &compositor.atoms.net_wm_fullscreen },
         { "_NET_WM_STATE_MAXIMIZED_HORZ",
           &compositor.atoms.net_wm_maximized_horz },

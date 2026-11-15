@@ -36,6 +36,9 @@ if spaghetti_build_dir != ''
     test('native-cursor', python,
          args: ['-B', files('native_cursor.py'), test_host, sauce],
          timeout: 60)
+    test('native-interactive', python,
+         args: ['-B', files('native_interactive.py'), test_host, sauce],
+         timeout: 60)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)

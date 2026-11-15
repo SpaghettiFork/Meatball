@@ -21,6 +21,19 @@
 #define CONFIGURE_LIMIT 256
 #define SEND_EVENT_MASK 0x80
 #define WM_SOURCE_APPLICATION 1
+
+enum WmMoveResize
+{
+    WM_RESIZE_TOP_LEFT,
+    WM_RESIZE_TOP,
+    WM_RESIZE_TOP_RIGHT,
+    WM_RESIZE_RIGHT,
+    WM_RESIZE_BOTTOM_RIGHT,
+    WM_RESIZE_BOTTOM,
+    WM_RESIZE_BOTTOM_LEFT,
+    WM_RESIZE_LEFT,
+    WM_MOVE,
+};
 #define WM_STATE_ADD 1
 #define WM_STATE_REMOVE 0
 #define WM_ICONIC_STATE 3
@@ -72,6 +85,9 @@ struct MbXdgSurface
     CARD32 frame_extents[4];
     Atom compositor_selection;
 };
+
+static void wm_message (struct MbXdgSurface *, Atom, CARD32, CARD32, CARD32,
+                        CARD32, CARD32, DeviceIntPtr);
 
 static Bool
 apply_bounds (MbSurface *surface, WindowPtr window)
@@ -477,27 +493,66 @@ show_menu (struct wl_client *client, struct wl_resource *resource,
 }
 
 static void
+interactive (struct MbXdgSurface *xdg, struct wl_resource *seat,
+             uint32_t serial, enum WmMoveResize direction)
+{
+    MbInteractiveGrab grab;
+
+    if (!xdg || !xdg->map_requested || !xdg->surface->pixels ||
+        !mb_input_take_grab (xdg->surface, seat, serial, &grab))
+        return;
+    wm_message (xdg, compositor.atoms.net_wm_moveresize, grab.x, grab.y,
+                direction, grab.button, WM_SOURCE_APPLICATION, grab.pointer);
+}
+
+static void
 move (struct wl_client *client, struct wl_resource *resource,
       struct wl_resource *seat, uint32_t serial)
 {
+    interactive (active_toplevel (resource), seat, serial, WM_MOVE);
 }
 
 static void
 resize (struct wl_client *client, struct wl_resource *resource,
         struct wl_resource *seat, uint32_t serial, uint32_t edges)
 {
-    if (edges != XDG_TOPLEVEL_RESIZE_EDGE_NONE &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_TOP &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_LEFT &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_RIGHT &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT &&
-        edges != XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT)
+    enum WmMoveResize direction;
+
+    switch (edges)
+    {
+    case XDG_TOPLEVEL_RESIZE_EDGE_NONE:
+        return;
+    case XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT:
+        direction = WM_RESIZE_TOP_LEFT;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_TOP:
+        direction = WM_RESIZE_TOP;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT:
+        direction = WM_RESIZE_TOP_RIGHT;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_RIGHT:
+        direction = WM_RESIZE_RIGHT;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT:
+        direction = WM_RESIZE_BOTTOM_RIGHT;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM:
+        direction = WM_RESIZE_BOTTOM;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT:
+        direction = WM_RESIZE_BOTTOM_LEFT;
+        break;
+    case XDG_TOPLEVEL_RESIZE_EDGE_LEFT:
+        direction = WM_RESIZE_LEFT;
+        break;
+    default:
         wl_resource_post_error (resource,
                                 XDG_TOPLEVEL_ERROR_INVALID_RESIZE_EDGE,
                                 "invalid resize edge");
+        return;
+    }
+    interactive (active_toplevel (resource), seat, serial, direction);
 }
 
 static void
@@ -540,7 +595,7 @@ set_min_size (struct wl_client *client, struct wl_resource *resource,
 
 static void
 wm_message (struct MbXdgSurface *xdg, Atom type, CARD32 first, CARD32 second,
-            CARD32 third, CARD32 fourth)
+            CARD32 third, CARD32 fourth, CARD32 fifth, DeviceIntPtr pointer)
 {
     MbSurface *surface;
     WindowPtr root;
@@ -560,11 +615,13 @@ wm_message (struct MbXdgSurface *xdg, Atom type, CARD32 first, CARD32 second,
     event.u.clientMessage.u.l.longs1 = second;
     event.u.clientMessage.u.l.longs2 = third;
     event.u.clientMessage.u.l.longs3 = fourth;
+    event.u.clientMessage.u.l.longs4 = fifth;
     if (XaceHookSendAccess (surface->client->native, NULL, root, &event, 1) ==
         Success)
         DeliverEventsToWindow (
-            PickPointer (surface->client->native), root, &event, 1,
-            SubstructureRedirectMask | SubstructureNotifyMask, NullGrab);
+            pointer ? pointer : PickPointer (surface->client->native), root,
+            &event, 1, SubstructureRedirectMask | SubstructureNotifyMask,
+            NullGrab);
 }
 
 static void
@@ -581,7 +638,7 @@ wm_state (struct MbXdgSurface *xdg, CARD32 action, Atom first, Atom second)
     if (xdg->map_requested)
     {
         wm_message (xdg, compositor.atoms.net_wm_state, action, first, second,
-                    WM_SOURCE_APPLICATION);
+                    WM_SOURCE_APPLICATION, 0, NULL);
         return;
     }
     window = mb_window_get (&xdg->surface->window,
@@ -667,7 +724,7 @@ static void
 set_minimized (struct wl_client *client, struct wl_resource *resource)
 {
     wm_message (active_toplevel (resource), compositor.atoms.wm_change_state,
-                WM_ICONIC_STATE, 0, 0, 0);
+                WM_ICONIC_STATE, 0, 0, 0, 0, NULL);
 }
 
 static const struct xdg_toplevel_interface toplevel_implementation = {

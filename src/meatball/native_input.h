@@ -5,6 +5,15 @@
 #include "native_surface.h"
 
 struct MbInput;
+typedef struct
+{
+    DeviceIntPtr pointer;
+    int32_t x, y;
+    unsigned int button;
+} MbInteractiveGrab;
+
+extern Bool mb_input_take_grab (MbSurface *surface, struct wl_resource *seat,
+                                uint32_t serial, MbInteractiveGrab *grab);
 extern Bool mb_input_initialize (void);
 extern void mb_input_shutdown (void);
 extern Bool mb_input_dispatch (void);

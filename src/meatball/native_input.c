@@ -424,6 +424,43 @@ static const struct wl_seat_interface seat_implementation = {
     .release = release,
 };
 
+Bool
+mb_input_take_grab (MbSurface *surface, struct wl_resource *resource,
+                    uint32_t serial, MbInteractiveGrab *result)
+{
+    struct InputResource *binding;
+    struct MbSeat *seat;
+    DeviceIntPtr pointer;
+    GrabPtr grab;
+
+    if (!wl_resource_instance_of (resource, &wl_seat_interface,
+                                  &seat_implementation))
+        return FALSE;
+    binding = wl_resource_get_user_data (resource);
+    seat = binding->seat;
+    if (seat->removed || seat->retire_pending ||
+        binding->client != surface->client || !seat->button_count ||
+        serial != seat->button_serial || !seat->grab_focus ||
+        mb_subsurface_root (seat->grab_focus) != surface ||
+        !BitIsOn (seat->buttons, seat->grab_button) ||
+        dixLookupDevice (&pointer, seat->pointer_id, surface->client->native,
+                         DixGrabAccess) != Success)
+        return FALSE;
+    grab = pointer->deviceGrab.grab;
+    if (!grab || !pointer->deviceGrab.implicitGrab ||
+        CLIENT_ID (grab->resource) != surface->client->native->index)
+        return FALSE;
+    *result = (MbInteractiveGrab){ pointer, pointer->spriteInfo->sprite->hot.x,
+                                   pointer->spriteInfo->sprite->hot.y,
+                                   seat->grab_button };
+    pointer->deviceGrab.DeactivateGrab (pointer);
+    pointer_focus (seat, NULL, 0, 0);
+    seat->grab_focus = seat->pointer_root = NULL;
+    seat->button_serial = seat->button_count = 0;
+    memset (seat->buttons, 0, sizeof (seat->buttons));
+    return TRUE;
+}
+
 static void
 bind_seat (struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
