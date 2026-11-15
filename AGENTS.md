@@ -23,6 +23,9 @@ source rectangles. Surface dimensions are limited to 32767 in each direction.
 Version 1 xdg toplevels support configure acknowledgements, titles, application
 IDs, parent windows, size hints, WM state requests, close requests, unmapping,
 and remapping.
+Toplevels use client-side decorations and request an undecorated X11 window
+through `_MOTIF_WM_HINTS`. Window geometry supplies `_GTK_FRAME_EXTENTS` for
+client-drawn shadows. Server-side decoration negotiation remains to be ported.
 
 This is an initial rendering checkpoint. Subsurfaces, Present,
 DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
