@@ -8,6 +8,7 @@ import sys
 
 
 XVFB_TARGET = "hw/vfb/Xvfb"
+SDK_METADATA = Path("meson-info/intro-installed.json")
 
 
 def xvfb_command(build):
@@ -26,9 +27,18 @@ def main():
     build = Path(sys.argv[1]).resolve()
     mode = sys.argv[2]
     if mode == "includes":
-        installed = json.loads((build / "meson-info/intro-installed.json").read_text())
-        sdk = next(Path(target).parent for target in installed.values()
-                   if Path(target).name == "xorg-server.h")
+        metadata = build / SDK_METADATA
+        if not metadata.is_file():
+            raise ValueError(
+                f"{build} is not a configured Spaghetti build directory: "
+                f"{SDK_METADATA} is missing. Set spaghetti_build_dir to the "
+                "directory created by Meson when building Spaghetti."
+            )
+        installed = json.loads(metadata.read_text())
+        sdk = next((Path(target).parent for target in installed.values()
+                    if Path(target).name == "xorg-server.h"), None)
+        if sdk is None:
+            raise ValueError(f"{metadata} does not contain Spaghetti's xorg-server.h SDK header")
         headers = [Path(source) for source, target in installed.items()
                    if Path(target).parent == sdk and Path(source).suffix == ".h"]
         names = {header.name for header in headers}
@@ -51,4 +61,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"Spaghetti SDK discovery failed: {error}", file=sys.stderr)
+        sys.exit(1)
