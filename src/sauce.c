@@ -25,19 +25,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <xorg/dix.h>
-#include <xorg/scrnintstr.h>
-#include <xorg/xf86.h>
-#include <xorg/xf86Module.h>
-#include <xorg/xorg-server.h>
+#include <xorg-server.h>
+#include <dix.h>
+#include <scrnintstr.h>
+#include <xf86.h>
+#include <xf86Module.h>
 #define XCSECURITY 1
 #include <X11/Xauth.h>
-#include <xorg/os.h>
+#include <os.h>
+#include <opaque.h>
 
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 #include "meatball/meatball.h"
 
@@ -254,7 +256,7 @@ sauce_setup (void *module, void *opts, int *errmaj, int *errmin)
 
     /* Setup the display name. */
     snprintf (config->display_name, sizeof (config->display_name), ":%s",
-              dixGetDisplayName (NULL));
+              display);
 
     const char *cookie_type = "MIT-MAGIC-COOKIE-1";
     uint32_t name_len = strlen (cookie_type);
