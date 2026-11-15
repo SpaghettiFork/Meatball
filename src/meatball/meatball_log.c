@@ -22,41 +22,52 @@
 static FILE *mb_log_out = NULL;
 
 void
-mb_log(MessageType type, const char *format, ...)
+mb_log (MessageType type, const char *format, ...)
 {
     char type_char;
-    switch (type) {
-        case X_WARNING: type_char = 'W'; break;
-        case X_ERROR:   type_char = 'E'; break;
-        case X_INFO:    type_char = 'I'; break;
-        case X_DEBUG:   type_char = 'D'; break;
-        default:        type_char = 'I'; break;
+    switch (type)
+    {
+    case X_WARNING:
+        type_char = 'W';
+        break;
+    case X_ERROR:
+        type_char = 'E';
+        break;
+    case X_INFO:
+        type_char = 'I';
+        break;
+    case X_DEBUG:
+        type_char = 'D';
+        break;
+    default:
+        type_char = 'I';
+        break;
     }
 
     va_list args;
-    va_start(args, format);
-    fprintf(mb_log_out, "%c", type_char);
-    vfprintf(mb_log_out, format, args);
-    fflush(mb_log_out);
-    va_end(args);
+    va_start (args, format);
+    fprintf (mb_log_out, "%c", type_char);
+    vfprintf (mb_log_out, format, args);
+    fflush (mb_log_out);
+    va_end (args);
 }
 
 void
-mb_crash_handler(int sig)
+mb_crash_handler (int sig)
 {
-    fprintf(mb_log_out, "Emeatball: Crashed with signal %d\n", sig);
-    fflush(mb_log_out);
-    _exit(1);
+    fprintf (mb_log_out, "Emeatball: Crashed with signal %d\n", sig);
+    fflush (mb_log_out);
+    _exit (1);
 }
 
 void
-mb_flush(void)
+mb_flush (void)
 {
-    fflush(mb_log_out);
+    fflush (mb_log_out);
 }
 
 void
-SetLoggerFile(FILE* file)
+SetLoggerFile (FILE *file)
 {
     mb_log_out = file;
 }

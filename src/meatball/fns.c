@@ -18,13 +18,13 @@
  * You should have received a copy of the GNU General Public License
  * along with 12to11.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include <sys/errno.h>
 #include <sys/fcntl.h>
 #include <sys/stat.h>
-#include <sys/errno.h>
 
 #include <signal.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <math.h>
@@ -35,26 +35,26 @@ typedef struct _Busfault Busfault;
 
 struct _RootWindowSelection
 {
-	/* The next and last event selection records in this chain.  */
-	RootWindowSelection *next, *last;
+    /* The next and last event selection records in this chain.  */
+    RootWindowSelection *next, *last;
 
-	/* The event mask one piece of code has selected for.  */
-	unsigned long event_mask;
+    /* The event mask one piece of code has selected for.  */
+    unsigned long event_mask;
 };
 
 struct _Busfault
 {
-	/* Nodes to the left and right.  */
-	Busfault *left, *right;
+    /* Nodes to the left and right.  */
+    Busfault *left, *right;
 
-	/* Start of the ignored area.  */
-	char *data;
+    /* Start of the ignored area.  */
+    char *data;
 
-	/* Size of the ignored area.  */
-	size_t ignored_area;
+    /* Size of the ignored area.  */
+    size_t ignored_area;
 
-	/* Height of this node.  */
-	int height;
+    /* Height of this node.  */
+    int height;
 };
 
 /* Events that are being selected for on the root window.  */
@@ -66,827 +66,845 @@ static Busfault *busfault_tree;
 /* Whether or not the SIGBUS handler has been installed.  */
 static Bool bus_handler_installed;
 
-void XLListFree(XLList *list, void (*item_func)(void *))
+void
+XLListFree (XLList *list, void (*item_func) (void *))
 {
-	XLList *tem, *last;
+    XLList *tem, *last;
 
-	tem = list;
+    tem = list;
 
-	while (tem)
-	{
-		last = tem;
-		tem = tem->next;
+    while (tem)
+    {
+        last = tem;
+        tem = tem->next;
 
-		if (item_func)
-			item_func(last->data);
-		XLFree(last);
-	}
+        if (item_func)
+            item_func (last->data);
+        XLFree (last);
+    }
 }
 
 XLList *
-XLListRemove(XLList *list, void *data)
+XLListRemove (XLList *list, void *data)
 {
-	XLList *tem, **last;
+    XLList *tem, **last;
 
-	last = &list;
+    last = &list;
 
-	while (*last)
-	{
-		tem = *last;
+    while (*last)
+    {
+        tem = *last;
 
-		if (tem->data == data)
-		{
-			*last = tem->next;
-			XLFree(tem);
-		}
-		else
-			last = &tem->next;
-	}
+        if (tem->data == data)
+        {
+            *last = tem->next;
+            XLFree (tem);
+        }
+        else
+            last = &tem->next;
+    }
 
-	return list;
+    return list;
 }
 
 XLList *
-XLListPrepend(XLList *list, void *data)
+XLListPrepend (XLList *list, void *data)
 {
-	XLList *tem;
+    XLList *tem;
 
-	tem = XLMalloc(sizeof *tem);
-	tem->data = data;
-	tem->next = list;
+    tem = XLMalloc (sizeof *tem);
+    tem->data = data;
+    tem->next = list;
 
-	return tem;
+    return tem;
 }
 
 /* List of XIDs (not pointers).  */
 
-void XIDListFree(XIDList *list, void (*item_func)(XID))
+void
+XIDListFree (XIDList *list, void (*item_func) (XID))
 {
-	XIDList *tem, *last;
+    XIDList *tem, *last;
 
-	tem = list;
+    tem = list;
 
-	while (tem)
-	{
-		last = tem;
-		tem = tem->next;
+    while (tem)
+    {
+        last = tem;
+        tem = tem->next;
 
-		if (item_func)
-			item_func(last->data);
-		XLFree(last);
-	}
+        if (item_func)
+            item_func (last->data);
+        XLFree (last);
+    }
 }
 
 XIDList *
-XIDListRemove(XIDList *list, XID resource)
+XIDListRemove (XIDList *list, XID resource)
 {
-	XIDList *tem, **last;
+    XIDList *tem, **last;
 
-	last = &list;
+    last = &list;
 
-	while (*last)
-	{
-		tem = *last;
+    while (*last)
+    {
+        tem = *last;
 
-		if (tem->data == resource)
-		{
-			*last = tem->next;
-			XLFree(tem);
-		}
-		else
-			last = &tem->next;
-	}
+        if (tem->data == resource)
+        {
+            *last = tem->next;
+            XLFree (tem);
+        }
+        else
+            last = &tem->next;
+    }
 
-	return list;
+    return list;
 }
 
 XIDList *
-XIDListPrepend(XIDList *list, XID resource)
+XIDListPrepend (XIDList *list, XID resource)
 {
-	XIDList *tem;
+    XIDList *tem;
 
-	tem = XLMalloc(sizeof *tem);
-	tem->data = resource;
-	tem->next = list;
+    tem = XLMalloc (sizeof *tem);
+    tem->data = resource;
+    tem->next = list;
 
-	return tem;
+    return tem;
 }
 
 /* Hash tables between XIDs and arbitrary data.  */
 
 XLAssocTable *
-XLCreateAssocTable(int size)
+XLCreateAssocTable (int size)
 {
-	XLAssocTable *table;
-	XLAssoc *buckets;
+    XLAssocTable *table;
+    XLAssoc *buckets;
 
-	table = XLMalloc(sizeof *table);
-	buckets = XLCalloc(size, sizeof *buckets);
+    table = XLMalloc (sizeof *table);
+    buckets = XLCalloc (size, sizeof *buckets);
 
-	table->buckets = buckets;
-	table->size = size;
+    table->buckets = buckets;
+    table->size = size;
 
-	while (--size >= 0)
-	{
-		/* Initialize each bucket with the sentinel node. */
-		buckets->prev = buckets;
-		buckets->next = buckets;
-		buckets++;
-	}
+    while (--size >= 0)
+    {
+        /* Initialize each bucket with the sentinel node. */
+        buckets->prev = buckets;
+        buckets->next = buckets;
+        buckets++;
+    }
 
-	return table;
+    return table;
 }
 
 static void
-Insque(XLAssoc *velem, XLAssoc *vprev)
+Insque (XLAssoc *velem, XLAssoc *vprev)
 {
-	XLAssoc *elem, *prev, *next;
+    XLAssoc *elem, *prev, *next;
 
-	elem = velem;
-	prev = vprev;
-	next = prev->next;
+    elem = velem;
+    prev = vprev;
+    next = prev->next;
 
-	prev->next = elem;
-	if (next)
-		next->prev = elem;
-	elem->next = next;
-	elem->prev = prev;
+    prev->next = elem;
+    if (next)
+        next->prev = elem;
+    elem->next = next;
+    elem->prev = prev;
 }
 
 static void
-Remque(XLAssoc *velem)
+Remque (XLAssoc *velem)
 {
-	XLAssoc *elem, *prev, *next;
+    XLAssoc *elem, *prev, *next;
 
-	elem = velem;
-	next = elem->next;
-	prev = elem->prev;
+    elem = velem;
+    next = elem->next;
+    prev = elem->prev;
 
-	if (next)
-		next->prev = prev;
+    if (next)
+        next->prev = prev;
 
-	if (prev)
-		prev->next = next;
+    if (prev)
+        prev->next = next;
 }
 
-void XLMakeAssoc(XLAssocTable *table, XID x_id, void *data)
+void
+XLMakeAssoc (XLAssocTable *table, XID x_id, void *data)
 {
-	int hash;
-	XLAssoc *bucket, *entry, *new_entry;
+    int hash;
+    XLAssoc *bucket, *entry, *new_entry;
 
-	hash = x_id % table->size;
-	bucket = &table->buckets[hash];
-	entry = bucket->next;
+    hash = x_id % table->size;
+    bucket = &table->buckets[hash];
+    entry = bucket->next;
 
-	if (entry != bucket)
-	{
-		/* Bucket isn't empty, start searching.  */
+    if (entry != bucket)
+    {
+        /* Bucket isn't empty, start searching.  */
 
-		for (; entry != bucket; entry = entry->next)
-		{
-			if (entry->x_id == x_id)
-			{
-				entry->data = data;
-				return;
-			}
+        for (; entry != bucket; entry = entry->next)
+        {
+            if (entry->x_id == x_id)
+            {
+                entry->data = data;
+                return;
+            }
 
-			if (entry->x_id > x_id)
-				break;
-		}
-	}
+            if (entry->x_id > x_id)
+                break;
+        }
+    }
 
-	/* Insert new_entry immediately before entry.  */
+    /* Insert new_entry immediately before entry.  */
 
-	new_entry = XLMalloc(sizeof *new_entry);
-	new_entry->x_id = x_id;
-	new_entry->data = data;
+    new_entry = XLMalloc (sizeof *new_entry);
+    new_entry->x_id = x_id;
+    new_entry->data = data;
 
-	Insque(new_entry, entry->prev);
+    Insque (new_entry, entry->prev);
 }
 
 void *
-XLLookUpAssoc(XLAssocTable *table, XID x_id)
+XLLookUpAssoc (XLAssocTable *table, XID x_id)
 {
-	int hash;
-	XLAssoc *bucket, *entry;
+    int hash;
+    XLAssoc *bucket, *entry;
 
-	hash = x_id % table->size;
-	bucket = &table->buckets[hash];
-	entry = bucket->next;
+    hash = x_id % table->size;
+    bucket = &table->buckets[hash];
+    entry = bucket->next;
 
-	for (; entry != bucket; entry = entry->next)
-	{
-		if (entry->x_id == x_id)
-			return entry->data;
+    for (; entry != bucket; entry = entry->next)
+    {
+        if (entry->x_id == x_id)
+            return entry->data;
 
-		if (entry->x_id > x_id)
-			return NULL;
-	}
+        if (entry->x_id > x_id)
+            return NULL;
+    }
 
-	return NULL;
+    return NULL;
 }
 
-void XLDeleteAssoc(XLAssocTable *table, XID x_id)
+void
+XLDeleteAssoc (XLAssocTable *table, XID x_id)
 {
-	int hash;
-	XLAssoc *bucket, *entry;
+    int hash;
+    XLAssoc *bucket, *entry;
 
-	hash = x_id % table->size;
-	bucket = &table->buckets[hash];
-	entry = bucket->next;
+    hash = x_id % table->size;
+    bucket = &table->buckets[hash];
+    entry = bucket->next;
 
-	for (; entry != bucket; entry = entry->next)
-	{
-		if (entry->x_id == x_id)
-		{
-			Remque(entry);
-			XLFree(entry);
-			return;
-		}
+    for (; entry != bucket; entry = entry->next)
+    {
+        if (entry->x_id == x_id)
+        {
+            Remque (entry);
+            XLFree (entry);
+            return;
+        }
 
-		if (entry->x_id > x_id)
-			return;
-	}
+        if (entry->x_id > x_id)
+            return;
+    }
 }
 
-void XLDestroyAssocTable(XLAssocTable *table)
+void
+XLDestroyAssocTable (XLAssocTable *table)
 {
-	int i;
-	XLAssoc *bucket, *entry, *entry_next;
+    int i;
+    XLAssoc *bucket, *entry, *entry_next;
 
-	for (i = 0; i < table->size; i++)
-	{
-		bucket = &table->buckets[i];
+    for (i = 0; i < table->size; i++)
+    {
+        bucket = &table->buckets[i];
 
-		for (entry = bucket->next; entry != bucket;
-			 entry = entry_next)
-		{
-			entry_next = entry->next;
-			XLFree(entry);
-		}
-	}
+        for (entry = bucket->next; entry != bucket; entry = entry_next)
+        {
+            entry_next = entry->next;
+            XLFree (entry);
+        }
+    }
 
-	XLFree(table->buckets);
-	XLFree(table);
+    XLFree (table->buckets);
+    XLFree (table);
 }
 
-void XLScaleRegion(pixman_region32_t *dst, pixman_region32_t *src,
-				   float scale_x, float scale_y)
+void
+XLScaleRegion (pixman_region32_t *dst, pixman_region32_t *src, float scale_x,
+               float scale_y)
 {
-	int nrects, i;
-	pixman_box32_t *src_rects;
-	pixman_box32_t *dst_rects;
+    int nrects, i;
+    pixman_box32_t *src_rects;
+    pixman_box32_t *dst_rects;
 
-	if (scale_x == 1.0f && scale_y == 1.0f)
-	{
-		pixman_region32_copy(dst, src);
-		return;
-	}
+    if (scale_x == 1.0f && scale_y == 1.0f)
+    {
+        pixman_region32_copy (dst, src);
+        return;
+    }
 
-	src_rects = pixman_region32_rectangles(src, &nrects);
+    src_rects = pixman_region32_rectangles (src, &nrects);
 
-	if (nrects < 128)
-		dst_rects = alloca(nrects * sizeof *dst_rects);
-	else
-		dst_rects = XLMalloc(nrects * sizeof *dst_rects);
+    if (nrects < 128)
+        dst_rects = alloca (nrects * sizeof *dst_rects);
+    else
+        dst_rects = XLMalloc (nrects * sizeof *dst_rects);
 
-	for (i = 0; i < nrects; ++i)
-	{
-		dst_rects[i].x1 = floor(src_rects[i].x1 * scale_x);
-		dst_rects[i].x2 = ceil(src_rects[i].x2 * scale_x);
-		dst_rects[i].y1 = floor(src_rects[i].y1 * scale_y);
-		dst_rects[i].y2 = ceil(src_rects[i].y2 * scale_y);
-	}
+    for (i = 0; i < nrects; ++i)
+    {
+        dst_rects[i].x1 = floor (src_rects[i].x1 * scale_x);
+        dst_rects[i].x2 = ceil (src_rects[i].x2 * scale_x);
+        dst_rects[i].y1 = floor (src_rects[i].y1 * scale_y);
+        dst_rects[i].y2 = ceil (src_rects[i].y2 * scale_y);
+    }
 
-	pixman_region32_fini(dst);
-	pixman_region32_init_rects(dst, dst_rects, nrects);
+    pixman_region32_fini (dst);
+    pixman_region32_init_rects (dst, dst_rects, nrects);
 
-	if (nrects >= 128)
-		XLFree(dst_rects);
+    if (nrects >= 128)
+        XLFree (dst_rects);
 }
 
-void XLExtendRegion(pixman_region32_t *dst, pixman_region32_t *src,
-					int extend_x, int extend_y)
+void
+XLExtendRegion (pixman_region32_t *dst, pixman_region32_t *src, int extend_x,
+                int extend_y)
 {
-	int nrects, i;
-	pixman_box32_t *src_rects;
-	pixman_box32_t *dst_rects;
+    int nrects, i;
+    pixman_box32_t *src_rects;
+    pixman_box32_t *dst_rects;
 
-	src_rects = pixman_region32_rectangles(src, &nrects);
+    src_rects = pixman_region32_rectangles (src, &nrects);
 
-	if (nrects < 128)
-		dst_rects = alloca(nrects * sizeof *dst_rects);
-	else
-		dst_rects = XLMalloc(nrects * sizeof *dst_rects);
+    if (nrects < 128)
+        dst_rects = alloca (nrects * sizeof *dst_rects);
+    else
+        dst_rects = XLMalloc (nrects * sizeof *dst_rects);
 
-	for (i = 0; i < nrects; ++i)
-	{
-		dst_rects[i].x1 = src_rects[i].x1;
-		dst_rects[i].x2 = src_rects[i].x2 + extend_x;
-		dst_rects[i].y1 = src_rects[i].y1;
-		dst_rects[i].y2 = src_rects[i].y2 + extend_y;
-	}
+    for (i = 0; i < nrects; ++i)
+    {
+        dst_rects[i].x1 = src_rects[i].x1;
+        dst_rects[i].x2 = src_rects[i].x2 + extend_x;
+        dst_rects[i].y1 = src_rects[i].y1;
+        dst_rects[i].y2 = src_rects[i].y2 + extend_y;
+    }
 
-	pixman_region32_fini(dst);
-	pixman_region32_init_rects(dst, dst_rects, nrects);
+    pixman_region32_fini (dst);
+    pixman_region32_init_rects (dst, dst_rects, nrects);
 
-	if (nrects >= 128)
-		XLFree(dst_rects);
+    if (nrects >= 128)
+        XLFree (dst_rects);
 }
 
-void XLTransformRegion(pixman_region32_t *dst, pixman_region32_t *src,
-					   BufferTransform transform, int width, int height)
+void
+XLTransformRegion (pixman_region32_t *dst, pixman_region32_t *src,
+                   BufferTransform transform, int width, int height)
 {
-	int nrects, i;
-	pixman_box32_t *src_rects;
-	pixman_box32_t *dst_rects;
+    int nrects, i;
+    pixman_box32_t *src_rects;
+    pixman_box32_t *dst_rects;
 
-	src_rects = pixman_region32_rectangles(src, &nrects);
+    src_rects = pixman_region32_rectangles (src, &nrects);
 
-	if (nrects < 128)
-		dst_rects = alloca(nrects * sizeof *dst_rects);
-	else
-		dst_rects = XLMalloc(nrects * sizeof *dst_rects);
+    if (nrects < 128)
+        dst_rects = alloca (nrects * sizeof *dst_rects);
+    else
+        dst_rects = XLMalloc (nrects * sizeof *dst_rects);
 
-	for (i = 0; i < nrects; ++i)
-	{
-		dst_rects[i] = src_rects[i];
+    for (i = 0; i < nrects; ++i)
+    {
+        dst_rects[i] = src_rects[i];
 
-		/* width and height should be in the transformed space! */
-		TransformBox(&dst_rects[i], transform, width, height);
-	}
+        /* width and height should be in the transformed space! */
+        TransformBox (&dst_rects[i], transform, width, height);
+    }
 
-	pixman_region32_fini(dst);
-	pixman_region32_init_rects(dst, dst_rects, nrects);
+    pixman_region32_fini (dst);
+    pixman_region32_init_rects (dst, dst_rects, nrects);
 
-	if (nrects >= 128)
-		XLFree(dst_rects);
+    if (nrects >= 128)
+        XLFree (dst_rects);
 }
 
-int XLOpenShm(void)
+int
+XLOpenShm (void)
 {
-	char name[sizeof "SharedBufferXXXXXXXX"];
-	int fd;
-	unsigned int i;
+    char name[sizeof "SharedBufferXXXXXXXX"];
+    int fd;
+    unsigned int i;
 
-	i = 0;
+    i = 0;
 
-	while (i <= 0xffffffff)
-	{
-		sprintf(name, "SharedBuffer%x", i);
-		fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    while (i <= 0xffffffff)
+    {
+        sprintf (name, "SharedBuffer%x", i);
+        fd = shm_open (name, O_RDWR | O_CREAT | O_EXCL, 0600);
 
-		if (fd >= 0)
-		{
-			shm_unlink(name);
-			return fd;
-		}
+        if (fd >= 0)
+        {
+            shm_unlink (name);
+            return fd;
+        }
 
-		if (errno == EEXIST)
-			++i;
-		else
-		{
-			perror("shm_open");
-			exit(1);
-		}
-	}
+        if (errno == EEXIST)
+            ++i;
+        else
+        {
+            perror ("shm_open");
+            exit (1);
+        }
+    }
 
-	return -1;
+    return -1;
 }
 
 static Bool
-ServerTimePredicate(Display *display, XEvent *event, XPointer arg)
+ServerTimePredicate (Display *display, XEvent *event, XPointer arg)
 {
-	return (event->type == PropertyNotify && event->xproperty.window == selection_transfer_window && event->xproperty.atom == _XL_SERVER_TIME_ATOM);
+    return (event->type == PropertyNotify &&
+            event->xproperty.window == selection_transfer_window &&
+            event->xproperty.atom == _XL_SERVER_TIME_ATOM);
 }
 
-Time XLGetServerTimeRoundtrip(void)
+Time
+XLGetServerTimeRoundtrip (void)
 {
-	XEvent event;
+    XEvent event;
 
-	XChangeProperty(compositor.display, selection_transfer_window,
-					_XL_SERVER_TIME_ATOM, XA_ATOM, 32, PropModeReplace,
-					(unsigned char *)&_XL_SERVER_TIME_ATOM, 1);
-	XIfEvent(compositor.display, &event, ServerTimePredicate, NULL);
+    XChangeProperty (compositor.display, selection_transfer_window,
+                     _XL_SERVER_TIME_ATOM, XA_ATOM, 32, PropModeReplace,
+                     (unsigned char *)&_XL_SERVER_TIME_ATOM, 1);
+    XIfEvent (compositor.display, &event, ServerTimePredicate, NULL);
 
-	return event.xproperty.time;
+    return event.xproperty.time;
 }
 
 static void
-ReselectRootWindowInput(void)
+ReselectRootWindowInput (void)
 {
-	unsigned long effective;
-	RootWindowSelection *record;
+    unsigned long effective;
+    RootWindowSelection *record;
 
-	effective = NoEventMask;
-	record = root_window_events.next;
+    effective = NoEventMask;
+    record = root_window_events.next;
 
-	if (!record)
-		return;
+    if (!record)
+        return;
 
-	while (record != &root_window_events)
-	{
-		effective |= record->event_mask;
-		record = record->next;
-	}
+    while (record != &root_window_events)
+    {
+        effective |= record->event_mask;
+        record = record->next;
+    }
 
-	XSelectInput(compositor.display,
-				 DefaultRootWindow(compositor.display),
-				 effective);
+    XSelectInput (compositor.display, DefaultRootWindow (compositor.display),
+                  effective);
 }
 
 RootWindowSelection *
-XLSelectInputFromRootWindow(unsigned long event_mask)
+XLSelectInputFromRootWindow (unsigned long event_mask)
 {
-	RootWindowSelection *selection;
+    RootWindowSelection *selection;
 
-	/* This lets different pieces of code select for input from the root
-	   window without clobbering eachothers event masks.  */
+    /* This lets different pieces of code select for input from the root
+       window without clobbering eachothers event masks.  */
 
-	selection = XLMalloc(sizeof *selection);
+    selection = XLMalloc (sizeof *selection);
 
-	/* If the global chain has not yet been initialized, initialize it
-	   now.  */
-	if (!root_window_events.next)
-	{
-		root_window_events.next = &root_window_events;
-		root_window_events.last = &root_window_events;
-	}
+    /* If the global chain has not yet been initialized, initialize it
+       now.  */
+    if (!root_window_events.next)
+    {
+        root_window_events.next = &root_window_events;
+        root_window_events.last = &root_window_events;
+    }
 
-	/* Link this onto the chain of events being selected for on the root
-	   window.  */
-	selection->next = root_window_events.next;
-	selection->last = &root_window_events;
-	root_window_events.next->last = selection;
-	root_window_events.next = selection;
+    /* Link this onto the chain of events being selected for on the root
+       window.  */
+    selection->next = root_window_events.next;
+    selection->last = &root_window_events;
+    root_window_events.next->last = selection;
+    root_window_events.next = selection;
 
-	/* Set the event mask.  */
-	selection->event_mask = event_mask;
+    /* Set the event mask.  */
+    selection->event_mask = event_mask;
 
-	/* Actually select for events.  */
-	ReselectRootWindowInput();
-	return selection;
+    /* Actually select for events.  */
+    ReselectRootWindowInput ();
+    return selection;
 }
 
-void XLDeselectInputFromRootWindow(RootWindowSelection *key)
+void
+XLDeselectInputFromRootWindow (RootWindowSelection *key)
 {
-	key->last->next = key->next;
-	key->next->last = key->last;
+    key->last->next = key->next;
+    key->next->last = key->last;
 
-	XLFree(key);
-	ReselectRootWindowInput();
+    XLFree (key);
+    ReselectRootWindowInput ();
 }
 
 static int
-GetHeight(Busfault *busfault)
+GetHeight (Busfault *busfault)
 {
-	if (!busfault)
-		return 0;
+    if (!busfault)
+        return 0;
 
-	return busfault->height;
+    return busfault->height;
 }
 
 static void
-FixHeights(Busfault *busfault)
+FixHeights (Busfault *busfault)
 {
-	XLAssert(busfault != NULL);
+    XLAssert (busfault != NULL);
 
-	busfault->height = 1 + MAX(GetHeight(busfault->left),
-							   GetHeight(busfault->right));
+    busfault->height =
+        1 + MAX (GetHeight (busfault->left), GetHeight (busfault->right));
 }
 
 static void
-RotateLeft(Busfault **root)
+RotateLeft (Busfault **root)
 {
-	Busfault *old_root, *new_root, *old_middle;
+    Busfault *old_root, *new_root, *old_middle;
 
-	/* Rotate *root->left to *root.  */
-	old_root = *root;
-	new_root = old_root->left;
-	old_middle = new_root->right;
-	old_root->left = old_middle;
-	new_root->right = old_root;
-	*root = new_root;
+    /* Rotate *root->left to *root.  */
+    old_root = *root;
+    new_root = old_root->left;
+    old_middle = new_root->right;
+    old_root->left = old_middle;
+    new_root->right = old_root;
+    *root = new_root;
 
-	/* Update heights.  */
-	FixHeights((*root)->right);
-	FixHeights(*root);
+    /* Update heights.  */
+    FixHeights ((*root)->right);
+    FixHeights (*root);
 }
 
 static void
-RotateRight(Busfault **root)
+RotateRight (Busfault **root)
 {
-	Busfault *old_root, *new_root, *old_middle;
+    Busfault *old_root, *new_root, *old_middle;
 
-	/* Rotate *root->right to *root.  */
-	old_root = *root;
-	new_root = old_root->right;
-	old_middle = new_root->left;
-	old_root->right = old_middle;
-	new_root->left = old_root;
-	*root = new_root;
+    /* Rotate *root->right to *root.  */
+    old_root = *root;
+    new_root = old_root->right;
+    old_middle = new_root->left;
+    old_root->right = old_middle;
+    new_root->left = old_root;
+    *root = new_root;
 
-	/* Update heights.  */
-	FixHeights((*root)->left);
-	FixHeights(*root);
+    /* Update heights.  */
+    FixHeights ((*root)->left);
+    FixHeights (*root);
 }
 
 static void
-RebalanceBusfault(Busfault **tree)
+RebalanceBusfault (Busfault **tree)
 {
-	if (*tree)
-	{
-		/* Check the left.  It could be too tall.  */
-		if (GetHeight((*tree)->left) > GetHeight((*tree)->right) + 1)
-		{
-			/* The left side is unbalanced.  Look for a taller
-			   grandchild of tree->left.  */
+    if (*tree)
+    {
+        /* Check the left.  It could be too tall.  */
+        if (GetHeight ((*tree)->left) > GetHeight ((*tree)->right) + 1)
+        {
+            /* The left side is unbalanced.  Look for a taller
+               grandchild of tree->left.  */
 
-			if (GetHeight((*tree)->left->left) > GetHeight((*tree)->left->right))
-				RotateLeft(tree);
-			else
-			{
-				XLAssert((*tree)->left->right != NULL);
+            if (GetHeight ((*tree)->left->left) >
+                GetHeight ((*tree)->left->right))
+                RotateLeft (tree);
+            else
+            {
+                XLAssert ((*tree)->left->right != NULL);
 
-				RotateRight(&(*tree)->left);
-				RotateLeft(tree);
-			}
+                RotateRight (&(*tree)->left);
+                RotateLeft (tree);
+            }
 
-			return;
-		}
-		/* Then, check the right.  */
-		else if (GetHeight((*tree)->right) > GetHeight((*tree)->left) + 1)
-		{
-			/* The right side is unbalanced.  Look for a taller
-			   grandchild of tree->right.  */
+            return;
+        }
+        /* Then, check the right.  */
+        else if (GetHeight ((*tree)->right) > GetHeight ((*tree)->left) + 1)
+        {
+            /* The right side is unbalanced.  Look for a taller
+               grandchild of tree->right.  */
 
-			if (GetHeight((*tree)->right->right) > GetHeight((*tree)->right->left))
-				RotateRight(tree);
-			else
-			{
-				XLAssert((*tree)->right->left != NULL);
+            if (GetHeight ((*tree)->right->right) >
+                GetHeight ((*tree)->right->left))
+                RotateRight (tree);
+            else
+            {
+                XLAssert ((*tree)->right->left != NULL);
 
-				RotateLeft(&(*tree)->right);
-				RotateRight(tree);
-			}
+                RotateLeft (&(*tree)->right);
+                RotateRight (tree);
+            }
 
-			return;
-		}
+            return;
+        }
 
-		/* Nothing was called, so fix heights.  */
-		FixHeights(*tree);
-	}
+        /* Nothing was called, so fix heights.  */
+        FixHeights (*tree);
+    }
 }
 
 static void
-RecordBusfault(Busfault **tree, Busfault *node)
+RecordBusfault (Busfault **tree, Busfault *node)
 {
-	if (!*tree)
-	{
-		/* Tree is empty.  Replace it with node.  */
-		*tree = node;
-		node->left = NULL;
-		node->right = NULL;
-		node->height = 1;
+    if (!*tree)
+    {
+        /* Tree is empty.  Replace it with node.  */
+        *tree = node;
+        node->left = NULL;
+        node->right = NULL;
+        node->height = 1;
 
-		return;
-	}
+        return;
+    }
 
-	/* Record busfault into the correct subtree.  */
-	if (node->data > (*tree)->data)
-		RecordBusfault(&(*tree)->right, node);
-	else
-		RecordBusfault(&(*tree)->left, node);
+    /* Record busfault into the correct subtree.  */
+    if (node->data > (*tree)->data)
+        RecordBusfault (&(*tree)->right, node);
+    else
+        RecordBusfault (&(*tree)->left, node);
 
-	/* Balance the tree.  */
-	RebalanceBusfault(tree);
+    /* Balance the tree.  */
+    RebalanceBusfault (tree);
 }
 
 static Busfault *
-DetectBusfault(Busfault *tree, char *address)
+DetectBusfault (Busfault *tree, char *address)
 {
-	/* This function is reentrant, but the functions that remove and
-	   insert busfaults are not.  */
+    /* This function is reentrant, but the functions that remove and
+       insert busfaults are not.  */
 
-	if (!tree)
-		return NULL;
-	else if (address >= tree->data && address < tree->data + tree->ignored_area)
-		return tree;
+    if (!tree)
+        return NULL;
+    else if (address >= tree->data &&
+             address < tree->data + tree->ignored_area)
+        return tree;
 
-	/* Continue searching in the tree.  */
-	if (address > tree->data)
-		/* Search in the right node.  */
-		return DetectBusfault(tree->right, address);
+    /* Continue searching in the tree.  */
+    if (address > tree->data)
+        /* Search in the right node.  */
+        return DetectBusfault (tree->right, address);
 
-	/* Search in the left.  */
-	return DetectBusfault(tree->left, address);
+    /* Search in the left.  */
+    return DetectBusfault (tree->left, address);
 }
 
 static void
-DeleteMin(Busfault **tree, Busfault *out)
+DeleteMin (Busfault **tree, Busfault *out)
 {
-	Busfault *old_root;
+    Busfault *old_root;
 
-	/* Delete and return the minimum value of the tree.  */
+    /* Delete and return the minimum value of the tree.  */
 
-	XLAssert(*tree != NULL);
+    XLAssert (*tree != NULL);
 
-	if (!(*tree)->left)
-	{
-		/* *tree contains the smallest value.  */
-		old_root = *tree;
-		out->data = old_root->data;
-		out->ignored_area = old_root->ignored_area;
-		*tree = old_root->right;
-		XLFree(old_root);
-	}
-	else
-		/* Keep looking to the left.  */
-		DeleteMin(&(*tree)->left, out);
+    if (!(*tree)->left)
+    {
+        /* *tree contains the smallest value.  */
+        old_root = *tree;
+        out->data = old_root->data;
+        out->ignored_area = old_root->ignored_area;
+        *tree = old_root->right;
+        XLFree (old_root);
+    }
+    else
+        /* Keep looking to the left.  */
+        DeleteMin (&(*tree)->left, out);
 
-	RebalanceBusfault(tree);
+    RebalanceBusfault (tree);
 }
 
 static void
-RemoveBusfault(Busfault **tree, char *data)
+RemoveBusfault (Busfault **tree, char *data)
 {
-	Busfault *old_root;
+    Busfault *old_root;
 
-	if (!*tree)
-		/* There should always be a busfault.  */
-		abort();
-	else if ((*tree)->data == data)
-	{
-		if ((*tree)->right)
-			/* Replace with min value of right subtree.  */
-			DeleteMin(&(*tree)->right, *tree);
-		else
-		{
-			/* Splice out old root.  */
-			old_root = *tree;
-			*tree = (*tree)->left;
-			XLFree(old_root);
-		}
-	}
-	else if (data > (*tree)->data)
-		/* Delete child from the right.  */
-		RemoveBusfault(&(*tree)->right, data);
-	else
-		/* Delete from the left.  */
-		RemoveBusfault(&(*tree)->left, data);
+    if (!*tree)
+        /* There should always be a busfault.  */
+        abort ();
+    else if ((*tree)->data == data)
+    {
+        if ((*tree)->right)
+            /* Replace with min value of right subtree.  */
+            DeleteMin (&(*tree)->right, *tree);
+        else
+        {
+            /* Splice out old root.  */
+            old_root = *tree;
+            *tree = (*tree)->left;
+            XLFree (old_root);
+        }
+    }
+    else if (data > (*tree)->data)
+        /* Delete child from the right.  */
+        RemoveBusfault (&(*tree)->right, data);
+    else
+        /* Delete from the left.  */
+        RemoveBusfault (&(*tree)->left, data);
 
-	RebalanceBusfault(tree);
+    RebalanceBusfault (tree);
 }
 
 static void
-HandleBusfault(int signal, siginfo_t *siginfo, void *ucontext)
+HandleBusfault (int signal, siginfo_t *siginfo, void *ucontext)
 {
-	/* SIGBUS received.  If the faulting address is currently part of a
-	   shared memory buffer, ignore.  Otherwise, print an error and
-	   return.  Only reentrant functions must be called within this
-	   signal handler.  */
+    /* SIGBUS received.  If the faulting address is currently part of a
+       shared memory buffer, ignore.  Otherwise, print an error and
+       return.  Only reentrant functions must be called within this
+       signal handler.  */
 
-	if (DetectBusfault(busfault_tree, siginfo->si_addr))
-		return;
+    if (DetectBusfault (busfault_tree, siginfo->si_addr))
+        return;
 
-	mb_log(X_ERROR, "meatball: Encountered a bus error, exiting...");
-	pthread_exit(NULL);
+    mb_log (X_ERROR, "meatball: Encountered a bus error, exiting...");
+    pthread_exit (NULL);
 }
 
 static void
-MaybeInstallBusHandler(void)
+MaybeInstallBusHandler (void)
 {
-	struct sigaction act;
+    struct sigaction act;
 
-	/* If the SIGBUS handler is already installed, return.  */
-	if (bus_handler_installed)
-		return;
+    /* If the SIGBUS handler is already installed, return.  */
+    if (bus_handler_installed)
+        return;
 
-	bus_handler_installed = True;
-	memset(&act, 0, sizeof act);
+    bus_handler_installed = True;
+    memset (&act, 0, sizeof act);
 
-	/* Install a SIGBUS handler.  When a client truncates the file
-	   backing a shared memory buffer without notifying the compositor,
-	   attempting to access the contents of the mapped memory beyond the
-	   end of the file will result in SIGBUS being called, which we
-	   handle here.  */
+    /* Install a SIGBUS handler.  When a client truncates the file
+       backing a shared memory buffer without notifying the compositor,
+       attempting to access the contents of the mapped memory beyond the
+       end of the file will result in SIGBUS being called, which we
+       handle here.  */
 
-	act.sa_flags = SA_SIGINFO;
-	act.sa_sigaction = HandleBusfault;
+    act.sa_flags = SA_SIGINFO;
+    act.sa_sigaction = HandleBusfault;
 
-	if (sigaction(SIGBUS, &act, NULL))
-	{
-		perror("sigaction");
-		abort();
-	}
+    if (sigaction (SIGBUS, &act, NULL))
+    {
+        perror ("sigaction");
+        abort ();
+    }
 }
 
 static void
-BlockSigbus(void)
+BlockSigbus (void)
 {
-	sigset_t sigset;
+    sigset_t sigset;
 
-	sigemptyset(&sigset);
-	sigaddset(&sigset, SIGBUS);
+    sigemptyset (&sigset);
+    sigaddset (&sigset, SIGBUS);
 
-	if (sigprocmask(SIG_BLOCK, &sigset, NULL))
-	{
-		perror("sigprocmask");
-		abort();
-	}
+    if (sigprocmask (SIG_BLOCK, &sigset, NULL))
+    {
+        perror ("sigprocmask");
+        abort ();
+    }
 }
 
 static void
-UnblockSigbus(void)
+UnblockSigbus (void)
 {
-	sigset_t sigset;
+    sigset_t sigset;
 
-	sigemptyset(&sigset);
-	sigaddset(&sigset, SIGBUS);
+    sigemptyset (&sigset);
+    sigaddset (&sigset, SIGBUS);
 
-	if (sigprocmask(SIG_UNBLOCK, &sigset, NULL))
-	{
-		perror("sigprocmask");
-		abort();
-	}
+    if (sigprocmask (SIG_UNBLOCK, &sigset, NULL))
+    {
+        perror ("sigprocmask");
+        abort ();
+    }
 }
 
 /* These must not overlap.  */
 
-void XLRecordBusfault(void *data, size_t data_size)
+void
+XLRecordBusfault (void *data, size_t data_size)
 {
-	Busfault *node;
+    Busfault *node;
 
-	MaybeInstallBusHandler();
+    MaybeInstallBusHandler ();
 
-	BlockSigbus();
-	node = XLMalloc(sizeof *node);
-	node->data = data;
-	node->ignored_area = data_size;
+    BlockSigbus ();
+    node = XLMalloc (sizeof *node);
+    node->data = data;
+    node->ignored_area = data_size;
 
-	RecordBusfault(&busfault_tree, node);
-	UnblockSigbus();
+    RecordBusfault (&busfault_tree, node);
+    UnblockSigbus ();
 }
 
-void XLRemoveBusfault(void *data)
+void
+XLRemoveBusfault (void *data)
 {
-	BlockSigbus();
-	RemoveBusfault(&busfault_tree, data);
-	UnblockSigbus();
+    BlockSigbus ();
+    RemoveBusfault (&busfault_tree, data);
+    UnblockSigbus ();
 }
 
-Bool XLAddFdFlag(int fd, int flag, Bool abort_on_error)
+Bool
+XLAddFdFlag (int fd, int flag, Bool abort_on_error)
 {
-	int flags, rc;
+    int flags, rc;
 
-	flags = fcntl(fd, F_GETFD);
+    flags = fcntl (fd, F_GETFD);
 
-	if (flags < 0)
-	{
-		if (abort_on_error)
-		{
-			perror("fcntl");
-			abort();
-		}
-		else
-			return False;
-	}
+    if (flags < 0)
+    {
+        if (abort_on_error)
+        {
+            perror ("fcntl");
+            abort ();
+        }
+        else
+            return False;
+    }
 
-	rc = fcntl(fd, F_SETFD, flags | flag);
+    rc = fcntl (fd, F_SETFD, flags | flag);
 
-	if (rc < 0)
-	{
-		if (abort_on_error)
-		{
-			perror("fcntl");
-			abort();
-		}
-		else
-			return False;
-	}
+    if (rc < 0)
+    {
+        if (abort_on_error)
+        {
+            perror ("fcntl");
+            abort ();
+        }
+        else
+            return False;
+    }
 
-	return True;
+    return True;
 }
 
 /* Functions for ports.  */
 
 #ifdef NeedPortPopcount
 
-int PortPopcount(unsigned long long int big)
+int
+PortPopcount (unsigned long long int big)
 {
-	int num_bits;
+    int num_bits;
 
-	num_bits = 0;
+    num_bits = 0;
 
-	while (big)
-	{
-		if (big & 1)
-			++num_bits;
+    while (big)
+    {
+        if (big & 1)
+            ++num_bits;
 
-		big >>= 1;
-	}
+        big >>= 1;
+    }
 
-	return num_bits;
+    return num_bits;
 }
 
 #endif /* NeedPortPopcount.  */
