@@ -6,7 +6,7 @@
 #include "native_window.h"
 #include <pixman.h>
 
-#define MB_COMPOSITOR_VERSION 1
+#define MB_COMPOSITOR_VERSION 4
 #define MB_MAX_DIMENSION INT16_MAX
 
 typedef struct MbSurface MbSurface;
@@ -26,11 +26,12 @@ struct MbSurface
     Bool input_default;
     Bool input_changed;
     Bool attach_pending;
-    Bool damage_pending;
     MbShmBuffer *pending_buffer;
     MbShmBuffer *buffer;
     XID pixels;
     int32_t width, height;
+    int32_t scale, pending_scale;
+    int32_t transform, pending_transform;
     int32_t pending_x, pending_y;
     struct wl_event_source *frame_timer;
     Bool frame_timer_armed;

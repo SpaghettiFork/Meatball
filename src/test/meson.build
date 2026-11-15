@@ -35,6 +35,9 @@ if spaghetti_build_dir != ''
     test('native-xdg', python,
          args: ['-B', files('native_xdg.py'), test_host, sauce],
          timeout: 30)
+    test('native-transforms', python,
+         args: ['-B', files('native_transforms.py'), test_host, sauce],
+         timeout: 30)
     loop_probe = shared_module('meatball-loop-probe', ['probe.c', 'loop_probe.c'],
                                dependencies: [common_dep, meatball_headers],
                                c_args: ['-UNDEBUG'],
