@@ -18,6 +18,8 @@ EXTENSION_NAME = b"MEATBALL"
 SOCKET_MODE = 0o600
 POLL_INTERVAL = 0.01
 RESET_ATTEMPTS = 3
+CUSTOM_SOCKET_MODE = 0o640
+SOCKET_PREFIX = "wayland-meatball-"
 
 
 def check_extension(connection):
@@ -93,6 +95,24 @@ def check_conflict(host, module, path):
     assert not path.exists()
 
 
+def check_configuration(host, module, directory):
+    path = directory / "custom"
+    with server(host, module, {"MEATBALL_TEST_SOCKET": str(path),
+                               "MEATBALL_TEST_SOCKET_MODE": f"{CUSTOM_SOCKET_MODE:o}"}) as (_, display):
+        with connect_x11(display) as connection:
+            check_extension(connection)
+        assert path.is_socket()
+        assert stat.S_IMODE(path.stat().st_mode) == CUSTOM_SOCKET_MODE
+    with server(host, module, {"MEATBALL_TEST_SOCKET": None,
+                               "MEATBALL_TEST_SOCKET_MODE": None,
+                               "XDG_RUNTIME_DIR": str(directory)}) as (process, display):
+        with connect_x11(display) as connection:
+            check_extension(connection)
+        path = directory / f"{SOCKET_PREFIX}{display}"
+        wait_socket(path, process)
+    assert not path.exists()
+
+
 def main():
     host, module = sys.argv[1:3]
     with tempfile.TemporaryDirectory(prefix="meatball-native-") as directory:
@@ -100,6 +120,7 @@ def main():
         check_lifecycle(host, module, root / "wayland")
         check_failed_start(host, module, root / "missing" / "wayland")
         check_conflict(host, module, root / "wayland")
+        check_configuration(host, module, root)
 
 
 if __name__ == "__main__":

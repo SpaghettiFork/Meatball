@@ -40,6 +40,14 @@ if spaghetti_build_dir != ''
     test('native-clients', python,
          args: ['-B', files('native_clients.py'), test_host, client_probe],
          timeout: 30)
+    socket_probe = shared_module('meatball-socket-probe', ['probe.c', 'socket_probe.c'],
+                                 dependencies: [common_dep, meatball_headers],
+                                 c_args: ['-UNDEBUG'],
+                                 link_args: ['-Wl,--wrap=chmod', '-Wl,--wrap=fchownat'],
+                                 link_with: meatball)
+    test('native-socket', python,
+         args: ['-B', files('native_socket.py'), test_host, socket_probe],
+         timeout: 30)
 else
     message('Set spaghetti_build_dir to enable the isolated module test host')
 endif

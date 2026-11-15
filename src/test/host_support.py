@@ -54,14 +54,20 @@ def connect_x11(display):
 @contextmanager
 def server(host, module, environment=None):
     read_fd, write_fd = os.pipe()
+    child_environment = {**os.environ,
+                         "MEATBALL_TEST_MODULE": str(Path(module).resolve())}
+    for name, value in (environment or {}).items():
+        if value is None:
+            child_environment.pop(name, None)
+        else:
+            child_environment[name] = value
     with tempfile.TemporaryFile() as log:
         try:
             process = subprocess.Popen(
                 [str(Path(host).resolve()), "-displayfd", str(write_fd),
                  "-nolisten", "tcp", "-ac", "-noreset", "-screen", "0",
                  f"{ROOT_WIDTH}x{ROOT_HEIGHT}x{SCREEN_DEPTH}"],
-                env={**os.environ, "MEATBALL_TEST_MODULE": str(Path(module).resolve()),
-                     **(environment or {})},
+                env=child_environment,
                 pass_fds=[write_fd], stdout=log, stderr=log,
             )
         finally:

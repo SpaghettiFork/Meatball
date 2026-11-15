@@ -18,11 +18,15 @@
 #include "server.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <xf86Module.h>
+
+#define INVALID_SOCKET_FD (-1)
+#define SOCKET_FD_PATH "/proc/self/fd/%d"
 
 Compositor compositor;
 
@@ -37,8 +41,10 @@ meatball_version (unsigned long *version)
 _MEATBALL_BOOL
 meatball_initialize (const struct meatball_config *config)
 {
-    struct stat directory;
+    struct stat directory, socket_info;
     char *parent, *separator;
+    char *socket_fd_path = NULL;
+    int socket_fd = INVALID_SOCKET_FD;
 
     if (compositor.wl_display)
         return MEATBALL_FALSE;
@@ -74,18 +80,33 @@ meatball_initialize (const struct meatball_config *config)
     if (wl_display_add_socket (compositor.wl_display, compositor.socket_path) <
         0)
         goto fail;
-    if (geteuid () == 0 &&
-        chown (compositor.socket_path, directory.st_uid, directory.st_gid) < 0)
+    socket_fd = open (compositor.socket_path, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    if (socket_fd == INVALID_SOCKET_FD || fstat (socket_fd, &socket_info) < 0)
         goto fail;
-    if (chmod (compositor.socket_path, config->socket_mode) < 0)
+    if (!S_ISSOCK (socket_info.st_mode))
+    {
+        errno = EINVAL;
+        goto fail;
+    }
+    if (geteuid () == 0 && fchownat (socket_fd, "", directory.st_uid,
+                                     directory.st_gid, AT_EMPTY_PATH) < 0)
+        goto fail;
+    if (asprintf (&socket_fd_path, SOCKET_FD_PATH, socket_fd) < 0)
+        goto fail;
+    if (chmod (socket_fd_path, config->socket_mode) < 0)
         goto fail;
     if (!mb_clients_initialize () || !mb_loop_initialize ())
         goto fail;
+    close (socket_fd);
+    free (socket_fd_path);
     mb_log (X_INFO, "meatball: Listening on %s\n", compositor.socket_path);
     return MEATBALL_TRUE;
 
 fail:
     mb_log (X_ERROR, "meatball: Startup failed: %s\n", strerror (errno));
+    if (socket_fd != INVALID_SOCKET_FD)
+        close (socket_fd);
+    free (socket_fd_path);
     meatball_shutdown ();
     return MEATBALL_FALSE;
 }
