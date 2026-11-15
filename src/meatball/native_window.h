@@ -23,6 +23,7 @@ struct MbAtoms
     Atom net_wm_focused;
     Atom wm_change_state;
     Atom gtk_frame_extents;
+    Atom motif_wm_hints;
 };
 
 typedef struct

@@ -46,6 +46,7 @@ mb_windows_initialize (void)
         { "_NET_WM_STATE_FOCUSED", &compositor.atoms.net_wm_focused },
         { "WM_CHANGE_STATE", &compositor.atoms.wm_change_state },
         { "_GTK_FRAME_EXTENTS", &compositor.atoms.gtk_frame_extents },
+        { "_MOTIF_WM_HINTS", &compositor.atoms.motif_wm_hints },
     };
     unsigned int i;
 

@@ -30,6 +30,9 @@
 #define WM_HINT_MAX_SIZE (1u << 5)
 #define MAX_TOPLEVEL_STATES 3
 #define WM_STATE_ATOM_LIMIT 128
+#define MOTIF_HINT_WORDS 5
+#define MOTIF_HINT_FLAGS 0
+#define MOTIF_HINT_DECORATIONS (1u << 1)
 
 struct XdgBase
 {
@@ -177,6 +180,7 @@ reset_mapping (struct MbXdgSurface *xdg)
                                     XA_WM_TRANSIENT_FOR,
                                     compositor.atoms.net_wm_state,
                                     compositor.atoms.gtk_frame_extents,
+                                    compositor.atoms.motif_wm_hints,
                                     XA_WM_NORMAL_HINTS };
         unsigned int i;
 
@@ -938,6 +942,17 @@ mb_xdg_map (MbSurface *surface)
     }
     if (surface->pixels && !xdg->map_requested)
     {
+        CARD32 hints[MOTIF_HINT_WORDS] = {
+            [MOTIF_HINT_FLAGS] = MOTIF_HINT_DECORATIONS,
+        };
+
+        /* Clients self-decorate until a server-side mode is negotiated. */
+        if (dixChangeWindowProperty (
+                surface->client->native, window,
+                compositor.atoms.motif_wm_hints,
+                compositor.atoms.motif_wm_hints, MB_PROPERTY_FORMAT_32,
+                PropModeReplace, ARRAY_SIZE (hints), hints, TRUE) != Success)
+            return FALSE;
         if (MapWindow (window, surface->client->native) != Success)
             return FALSE;
         xdg->map_requested = TRUE;

@@ -57,6 +57,8 @@ TITLE = "Native Meatball test"
 APP_ID = "org.spaghetti.MeatballTest"
 WM_WIDTH = 20
 WM_HEIGHT = 30
+MOTIF_HINT_DECORATIONS = 1 << 1
+CLIENT_DECORATION_HINTS = (MOTIF_HINT_DECORATIONS, 0, 0, 0, 0)
 
 
 def string_argument(value):
@@ -144,7 +146,7 @@ def configure_window(x11, window, width, height):
                             CW_WIDTH_HEIGHT, 0, width, height))
 
 
-def wm_map(wm, window):
+def wm_map(wm, window, observer):
     while True:
         event = receive_exact(wm, X11_REPLY_SIZE)
         type = event[0] & ~SEND_EVENT_FLAG
@@ -155,6 +157,8 @@ def wm_map(wm, window):
         elif type == MAP_REQUEST:
             target, = struct.unpack_from("<I", event, 8)
             assert target == window
+            assert property32(observer, window, "_MOTIF_WM_HINTS",
+                              intern_atom(observer, "_MOTIF_WM_HINTS")) == CLIENT_DECORATION_HINTS
             wm.sendall(struct.pack("<BBHI", MAP_WINDOW, 0, 2, target))
             return
 
@@ -208,7 +212,7 @@ def check_mapping(x11, root, path, wm=None):
         client.attach(buffer)
         client.commit()
         if wm:
-            wm_map(wm, window)
+            wm_map(wm, window, x11)
         client.frame_done(callback)
         assert map_state(x11, window) == VIEWABLE
         wait_pixels(x11, window)
@@ -218,6 +222,8 @@ def check_mapping(x11, root, path, wm=None):
         assert len(hints) == 18 and hints[0] == (1 << 4) | (1 << 5)
         assert hints[5:9] == (1, 1, 100, 80)
         assert property32(x11, window, "_GTK_FRAME_EXTENTS", XA_CARDINAL) == (0, 0, 0, 0)
+        assert property32(x11, window, "_MOTIF_WM_HINTS",
+                          intern_atom(x11, "_MOTIF_WM_HINTS")) == CLIENT_DECORATION_HINTS
         if wm:
             state_atom = intern_atom(x11, "_NET_WM_STATE")
             fullscreen = intern_atom(x11, "_NET_WM_STATE_FULLSCREEN")
@@ -251,9 +257,11 @@ def check_mapping(x11, root, path, wm=None):
         callback = client.frame()
         client.commit()
         if wm:
-            wm_map(wm, window)
+            wm_map(wm, window, x11)
         client.frame_done(callback)
         assert map_state(x11, window) == VIEWABLE
+        assert property32(x11, window, "_MOTIF_WM_HINTS",
+                          intern_atom(x11, "_MOTIF_WM_HINTS")) == CLIENT_DECORATION_HINTS
         client.send(client.top, TOP_DESTROY)
         client.send(client.xdg, XDG_DESTROY)
         client.send(client.surface, WL_SURFACE_DESTROY)
