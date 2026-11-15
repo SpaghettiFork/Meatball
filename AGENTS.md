@@ -1,6 +1,6 @@
 # Meatball.
 
-A Wayland implementation on X11, based upon 12to11 that lets Spaghetti users sleep with ease.
+A Wayland implementation inside Spaghetti, based upon 12to11.
 
 ## Supported platforms.
 
@@ -10,7 +10,20 @@ support from that DDX.
 
 ## Enabling Meatball
 
-As of this commit, Meatball is not yet available.
+The native module currently creates a Wayland listener for each server
+generation. Surface rendering and input are being ported and remain unavailable.
+
+Load the `sauce` extension module in Spaghetti's `Module` section. Its
+`SocketPath` option accepts an absolute Unix socket path; by default it uses
+`$XDG_RUNTIME_DIR/wayland-meatball-<X display>`. `SocketMode` accepts octal
+permissions and defaults to `0600`. The parent directory must already exist.
+When running as root, the module assigns the socket to that directory's owner
+and group. Clients select the absolute path through `WAYLAND_DISPLAY`.
+
+Configuration ABI 2.0 replaces the previous process and renderer options with
+`socket_path` and `socket_mode`. Module setup registers the `MEATBALL` X
+extension. Its X protocol dispatcher returns `BadRequest`; Wayland clients
+communicate through the configured socket.
 
 ## Building against Spaghetti
 
@@ -26,7 +39,9 @@ meson test -C src/builddir --print-errorlogs
 Build Spaghetti with Xvfb enabled first. The test host relinks its existing
 objects with a module-loading hook and runs a separate CPU-backed X server.
 The `native-sdk` test loads a probe for the required server exports and checks
-an X11 client connection. Tests need permission to create local Unix sockets.
+an X11 client connection. `native-lifecycle` loads the actual module and checks
+resets, socket cleanup, failed startup, and conflicting listeners. Tests need
+permission to create local Unix sockets.
 
 An installed matching SDK can be selected through `pkg-config` by omitting
 `spaghetti_build_dir`. The isolated module test host requires the build tree.
