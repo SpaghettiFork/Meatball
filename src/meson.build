@@ -130,6 +130,7 @@ sauce = shared_module('sauce',
     link_with: [
         meatball
     ],
+    link_args: ['-Wl,-z,now'],
     install: true,
     install_dir: module_dir,
 )

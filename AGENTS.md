@@ -47,6 +47,7 @@ EndSection
 Use your session user's runtime directory; `1000` is the example UID. Preserve
 other module entries in that section. The subsection loads Sauce with its
 options, so replace an existing `Load "sauce"` entry with this subsection.
+Place `EndSubSection` before the enclosing module's `EndSection`.
 Use a literal absolute path in `SocketPath`. For automatic socket naming,
 set `XDG_RUNTIME_DIR` in the environment used to launch Xorg.
 
@@ -84,6 +85,19 @@ The SDK must include the 32-bit native SHM stride parameter and the exported
 XACE send-access hook on Spaghetti's `meatball` branch. The configuration
 check validates the SHM signature, and the
 SDK probe validates the required exports.
+
+Run the server built from that tree together with the newly built module.
+To select both when launching through `startx`:
+
+```sh
+startx -- /media/VMs/SpaghettiDev/build/hw/xfree86/Xorg \
+    -modulepath /media/VMs/MeatballDev/src/build,/usr/lib/xorg/modules
+```
+
+Here `src/build` is the Meatball build directory containing `libsauce.so`;
+use `src/builddir` if following the build example above. Sauce resolves its
+server API imports when loaded, so missing exports produce a module-load
+error.
 
 Build Spaghetti with Xvfb enabled first. The test host relinks its existing
 objects with a module-loading hook and runs a separate CPU-backed X server.
