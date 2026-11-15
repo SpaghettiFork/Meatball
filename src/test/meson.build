@@ -29,6 +29,9 @@ if spaghetti_build_dir != ''
     test('native-surfaces', python,
          args: ['-B', files('native_surfaces.py'), test_host, sauce],
          timeout: 30)
+    test('native-subsurfaces', python,
+         args: ['-B', files('native_subsurfaces.py'), test_host, sauce],
+         timeout: 60)
     test('native-shm', python,
          args: ['-B', files('native_shm.py'), test_host, sauce],
          timeout: 30)

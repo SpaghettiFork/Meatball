@@ -78,7 +78,7 @@ def transformed(rows, transform, scale=1):
     return result
 
 
-def attach_rows(client, rows):
+def attach_rows(client, rows, surface=None):
     width, height = len(rows[0]), len(rows)
     fd = os.memfd_create("meatball-transform-test", os.MFD_CLOEXEC)
     stride = width * BYTES_PER_PIXEL
@@ -88,7 +88,10 @@ def attach_rows(client, rows):
     pool = create_pool(client, client.shm, fd, stride * height)
     buffer = create_buffer(client, pool, 0, width, height, stride, SHM_ARGB8888)
     client.send(pool, POOL_DESTROY)
-    client.attach(buffer)
+    if surface is None:
+        client.attach(buffer)
+    else:
+        client.send(surface, SURFACE_ATTACH, struct.pack("=Iii", buffer, 0, 0))
     return fd, buffer
 
 
