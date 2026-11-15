@@ -39,9 +39,15 @@ including children outside the parent's buffer. The canvas is limited to
 SHM pixels are copied when committed, and frame callbacks wait until the
 corresponding surface state is visible in a mapped tree.
 
-This is an initial rendering checkpoint. Present, DRI3 buffers, Wayland input,
-output globals, popups, clipboard, drag and drop, settings, and leases remain
-to be ported. Frame callbacks currently use a
+Version 5 `wl_seat` exposes each enabled Xorg master pointer/keyboard pair.
+Pointer events follow committed surface-tree stacking and input regions, with
+implicit button grabs and wheel scrolling. Keyboard events follow native X11
+focus, with the server's current XKB keymap, modifiers, held keys, and repeat
+settings. Keymap changes and master-device hotplug update existing clients.
+
+Present, DRI3 buffers, cursors, interactive move/resize, output globals, popups,
+clipboard, drag and drop, settings, and leases remain to be ported. The next
+protocol globals after input are `wl_output` and `wl_data_device_manager`. Frame callbacks currently use a
 16 ms server-loop timer. Text-input-v3 is deferred.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
@@ -101,7 +107,8 @@ different directory. For an already configured Meatball build, use
 The resulting module is `src/builddir/libsauce.so`.
 
 The SDK must include the 32-bit native SHM stride parameter and the exported
-XACE send-access hook on Spaghetti's `meatball` branch. The configuration
+XACE send-access hook, `XISetEventMask`, and `RT_XKBCLIENT` on Spaghetti's
+`meatball` branch. The configuration
 check validates the SHM signature, and the
 SDK probe validates the required exports.
 

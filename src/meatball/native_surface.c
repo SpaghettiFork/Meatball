@@ -178,6 +178,7 @@ surface_destroyed (struct wl_resource *resource)
     struct Frame *frame, *next;
     MbSurfaceCommit *commit, *next_commit;
 
+    mb_input_surface_destroyed (surface);
     mb_subsurface_surface_destroyed (surface);
     mb_xdg_surface_destroyed (surface);
     mb_viewport_surface_destroyed (surface);

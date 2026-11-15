@@ -31,6 +31,8 @@ loop_block (void *data, void *timeout)
     mb_clients_check ();
     mb_xdg_refresh_shapes ();
     wl_event_loop_dispatch_idle (compositor.wl_event_loop);
+    if (mb_input_dispatch ())
+        AdjustWaitForDelay (timeout, 0);
     wl_display_flush_clients (compositor.wl_display);
 }
 
