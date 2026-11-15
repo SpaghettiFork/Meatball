@@ -51,7 +51,8 @@ class Wayland:
             sent = self.connection.sendmsg([packet], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
                                                        array("i", fds))])
             packet = packet[sent:]
-        self.connection.sendall(packet)
+        if packet:
+            self.connection.sendall(packet)
 
     def receive(self):
         object_id, size_opcode = struct.unpack("=II", receive_exact(
