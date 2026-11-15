@@ -163,6 +163,15 @@ alpha, compositor ownership changes, geometry commits, remapping, and resets.
 parent-committed position and stacking, alpha, negative coordinates, input
 regions, buffer transforms and viewports, role lifetime, destruction, and reset.
 
+`native-keymap` parses sealed keymap descriptors and checks live layout changes.
+`native-input` injects XTEST pointer and keyboard events, exercises focus and
+implicit grabs, and checks modifiers, repeat controls, client isolation,
+subsurface destruction, and master-device hotplug. `native-cursor` reads back
+ARGB cursor images through XFixes. `native-interactive` checks move/resize
+serials, all resize directions, and pointer-grab transfer to a test WM.
+The input checks use `libxkbcommon.so.0` to parse keymaps. XTEST is enabled
+explicitly in the isolated input test servers.
+
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is
 disabled for that host.
