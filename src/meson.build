@@ -11,6 +11,36 @@ egl_renderer = get_option('egl_renderer')
 module_dir = join_paths(get_option('libdir'), get_option('module_dir'))
 
 cc = meson.get_compiler('c')
+python = import('python').find_installation('python3')
+spaghetti_build_dir = get_option('spaghetti_build_dir')
+
+if spaghetti_build_dir != ''
+    spaghetti_build_dir = join_paths(meson.project_source_root(), spaghetti_build_dir)
+    sdk_paths = run_command(python, 'test/sdk_paths.py',
+                            spaghetti_build_dir, 'includes', check: true)
+    sdk_includes = []
+    foreach path : sdk_paths.stdout().strip().split('\n')
+        sdk_includes += include_directories(path)
+    endforeach
+    server_sdk = declare_dependency(include_directories: sdk_includes,
+                                    dependencies: dependency('pixman-1'))
+else
+    server_sdk = dependency('xorg-server')
+endif
+
+if not cc.compiles('''
+    #include <xorg-server.h>
+    #include <dixstruct.h>
+    #include <external.h>
+    #include <present.h>
+    #include <shmint.h>
+    int main(void) {
+        ExternalClientCallbacks callbacks = {0};
+        return sizeof(callbacks) == 0;
+    }
+''', dependencies: server_sdk, name: 'Spaghetti native extension SDK')
+    error('Use the matching Spaghetti SDK or set spaghetti_build_dir to its built tree')
+endif
 
 add_project_arguments('-fno-strict-aliasing', language : 'c')
 add_project_arguments('-fvisibility=hidden', language : 'c')
@@ -146,14 +176,15 @@ srcs_sauce = [
     'sauce.c'
 ]
 
-shared_module('sauce',
+sauce = shared_module('sauce',
     srcs_sauce,
     include_directories: [
         meatball_inc
     ],
     dependencies: [
         common_dep,
-        meatball_headers
+        meatball_headers,
+        server_sdk,
     ],
     link_with: [
         meatball
@@ -161,3 +192,7 @@ shared_module('sauce',
     install: true,
     install_dir: module_dir,
 )
+
+if get_option('tests')
+    subdir('test')
+endif
