@@ -42,11 +42,19 @@ communicate through the configured socket.
 Use the SDK from the Spaghetti build that will load the module:
 
 ```sh
+cd /media/VMs/MeatballDev
+meson compile -C /media/VMs/SpaghettiDev/build
 meson setup src/builddir src \
     -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build
 meson compile -C src/builddir
 meson test -C src/builddir --print-errorlogs
 ```
+
+`spaghetti_build_dir` names Spaghetti's configured build directory. It must
+contain `meson-info/intro-installed.json`. The source checkout itself is a
+different directory. For an already configured Meatball build, use
+`meson configure src/builddir -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build`.
+The resulting module is `src/builddir/libsauce.so`.
 
 The SDK must include the 32-bit native SHM stride parameter and the exported
 XACE send-access hook on Spaghetti's `meatball` branch. The configuration

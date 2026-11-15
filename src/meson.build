@@ -16,7 +16,10 @@ spaghetti_build_dir = get_option('spaghetti_build_dir')
 if spaghetti_build_dir != ''
     spaghetti_build_dir = join_paths(meson.project_source_root(), spaghetti_build_dir)
     sdk_paths = run_command(python, 'test/sdk_paths.py',
-                            spaghetti_build_dir, 'includes', check: true)
+                            spaghetti_build_dir, 'includes', check: false)
+    if sdk_paths.returncode() != 0
+        error(sdk_paths.stderr().strip())
+    endif
     sdk_includes = []
     foreach path : sdk_paths.stdout().strip().split('\n')
         sdk_includes += include_directories(path)
