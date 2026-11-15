@@ -17,6 +17,7 @@ struct MbAtoms
     Atom utf8_string;
     Atom net_wm_pid;
     Atom net_wm_state;
+    Atom net_wm_moveresize;
     Atom net_wm_fullscreen;
     Atom net_wm_maximized_horz;
     Atom net_wm_maximized_vert;

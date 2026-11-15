@@ -50,6 +50,13 @@ KEYCODE_OFFSET = 8
 BTN_LEFT = 0x110
 SHIFT_MASK = 1
 FIXED_ONE = 256
+XI_CHANGE_HIERARCHY = 43
+XI_SET_CLIENT_POINTER = 44
+XI_ADD_MASTER = 1
+XI_REMOVE_MASTER = 2
+XI_FLOATING = 2
+XI_ADD_MASTER_NAME = b"Meatball input test"
+X11_GENERIC_EVENT = 35
 
 
 def extension(x11, name):
@@ -79,20 +86,20 @@ class XInput:
                                             3, window, 0))
 
     def add_master(self):
-        name = b"Meatball input test"
+        name = XI_ADD_MASTER_NAME
         padded = name + bytes(-len(name) % 4)
-        change = struct.pack("<HHHBB", 1, 2 + len(padded) // 4, len(name), 1, 1) + padded
-        self.connection.sendall(struct.pack("<BBHBBH", self.xi, 43,
+        change = struct.pack("<HHHBB", XI_ADD_MASTER, 2 + len(padded) // 4, len(name), 1, 1) + padded
+        self.connection.sendall(struct.pack("<BBHBBH", self.xi, XI_CHANGE_HIERARCHY,
                                             (8 + len(change)) // 4, 1, 0, 0) + change)
         self.sync()
 
     def remove_master(self, pointer):
-        change = struct.pack("<HHHBBHH", 2, 3, pointer, 2, 0, 0, 0)
-        self.connection.sendall(struct.pack("<BBHBBH", self.xi, 43, 5, 1, 0, 0) + change)
+        change = struct.pack("<HHHBBHH", XI_REMOVE_MASTER, 3, pointer, XI_FLOATING, 0, 0, 0)
+        self.connection.sendall(struct.pack("<BBHBBH", self.xi, XI_CHANGE_HIERARCHY, 5, 1, 0, 0) + change)
         self.sync()
 
     def client_pointer(self, pointer):
-        self.connection.sendall(struct.pack("<BBHIHH", self.xi, 44, 3, 0, pointer, 0))
+        self.connection.sendall(struct.pack("<BBHIHH", self.xi, XI_SET_CLIENT_POINTER, 3, 0, pointer, 0))
         self.sync()
 
     def sync(self):
@@ -102,7 +109,7 @@ class XInput:
             assert reply[0] != 0, reply.hex()
             if reply[0] == 1:
                 break
-            if reply[0] == 35:
+            if reply[0] == X11_GENERIC_EVENT:
                 receive_exact(self.connection, struct.unpack_from("<I", reply, 4)[0] * 4)
 
 
@@ -142,13 +149,14 @@ class InputClient(XdgClient):
                 return event[2], events
 
 
-def map_window(client, x11, root):
-    window, = query_tree(x11, root)
+def map_window(client, x11, root, window=None, origin=WINDOW_ORIGIN):
+    if window is None:
+        window, = query_tree(x11, root)
     client.commit()
     client.configure()
     publish(client, client.surface, solid(RED, WINDOW_SIZE, WINDOW_SIZE))
     x11.sendall(struct.pack("<BBHIHHii", CONFIGURE_WINDOW, 0, 5, window,
-                            CW_POSITION, 0, WINDOW_ORIGIN, WINDOW_ORIGIN))
+                            CW_POSITION, 0, origin, WINDOW_ORIGIN))
     client.sync()
     return window
 
@@ -258,6 +266,36 @@ def check_input(path, x11, root):
             for fd in client.fds:
                 os.close(fd)
             client.fds.clear()
+        before = query_tree(x11, root)
+        peer = InputClient(path)
+        try:
+            peer_window, = query_tree(x11, root) - before
+            map_window(peer, x11, root, window=peer_window, origin=96)
+            actor.focus(window)
+            actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)
+            client.until(client.keyboard, KEYBOARD_KEY)
+            actor.focus(peer_window)
+            client.until(client.keyboard, KEYBOARD_LEAVE)
+            data, _ = peer.until(peer.keyboard, KEYBOARD_ENTER)
+            assert struct.unpack_from("=I", data, 8)[0] == 4
+            assert struct.unpack_from("=I", data, 12)[0] == KEY_A
+            actor.fake(KEY_RELEASE, KEY_A + KEYCODE_OFFSET)
+            data, _ = peer.until(peer.keyboard, KEYBOARD_KEY)
+            assert struct.unpack("=IIII", data)[2:] == (KEY_A, 0)
+            events = client.roundtrip_events()
+            assert not any(object_id == client.keyboard and opcode == KEYBOARD_KEY
+                           for object_id, opcode, _ in events)
+            actor.fake(MOTION, x=101, y=WINDOW_ORIGIN + 7)
+            peer.until(peer.pointer, POINTER_ENTER)
+            actor.fake(BUTTON_PRESS, 1)
+            peer.until(peer.pointer, POINTER_BUTTON)
+        finally:
+            # Disconnect with keyboard focus and a native implicit pointer grab.
+            peer.close()
+        actor.fake(BUTTON_RELEASE, 1)
+        actor.focus(window)
+        actor.sync()
+        client.sync()
         client.send(client.pointer, 1)
         client.send(client.keyboard, 0)
         client.send(client.seat, 3)
