@@ -19,6 +19,16 @@ if spaghetti_build_dir != ''
     test('native-lifecycle', python,
          args: ['-B', files('native_lifecycle.py'), test_host, sauce],
          timeout: 60)
+    test('native-loop', python,
+         args: ['-B', files('native_loop.py'), test_host, sauce],
+         timeout: 30)
+    loop_probe = shared_module('meatball-loop-probe', 'loop_probe.c',
+                               dependencies: [common_dep, meatball_headers],
+                               c_args: ['-UNDEBUG'],
+                               link_with: meatball)
+    test('native-scheduler', python,
+         args: ['-B', files('native_scheduler.py'), test_host, loop_probe],
+         timeout: 30)
 else
     message('Set spaghetti_build_dir to enable the isolated module test host')
 endif

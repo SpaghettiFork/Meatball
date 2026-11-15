@@ -79,6 +79,8 @@ meatball_initialize (const struct meatball_config *config)
         goto fail;
     if (chmod (compositor.socket_path, config->socket_mode) < 0)
         goto fail;
+    if (!mb_loop_initialize ())
+        goto fail;
     mb_log (X_INFO, "meatball: Listening on %s\n", compositor.socket_path);
     return MEATBALL_TRUE;
 
@@ -91,6 +93,7 @@ fail:
 void
 meatball_shutdown (void)
 {
+    mb_loop_shutdown ();
     if (compositor.wl_display)
     {
         wl_display_destroy_clients (compositor.wl_display);
