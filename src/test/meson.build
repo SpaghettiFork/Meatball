@@ -23,6 +23,13 @@ if spaghetti_build_dir != ''
     test('native-lifecycle', python,
          args: ['-B', files('native_lifecycle.py'), test_host, sauce],
          timeout: 60)
+    keymap_probe = shared_module('meatball-keymap-probe', ['probe.c', 'keymap_probe.c'],
+                                 dependencies: [common_dep, meatball_headers],
+                                 c_args: ['-UNDEBUG'],
+                                 link_with: meatball)
+    test('native-keymap', python,
+         args: ['-B', files('native_keymap.py'), test_host, keymap_probe],
+         timeout: 30)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)

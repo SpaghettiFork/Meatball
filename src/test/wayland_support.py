@@ -1,6 +1,7 @@
 """Minimal core Wayland requests for native-host integration checks."""
 
 from array import array
+import os
 import socket
 import struct
 
@@ -14,6 +15,7 @@ DISPLAY_GET_REGISTRY = 1
 DISPLAY_ERROR = 0
 CALLBACK_DONE = 0
 REGISTRY_GLOBAL = 0
+WAYLAND_FD_LIMIT = 64
 
 
 class WaylandProtocolError(RuntimeError):
@@ -28,8 +30,12 @@ class Wayland:
         self.connection.settimeout(STARTUP_TIMEOUT)
         self.connection.connect(str(path))
         self.next_id = WAYLAND_DISPLAY_ID + 1
+        self.fds = []
 
     def close(self):
+        for fd in self.fds:
+            os.close(fd)
+        self.fds.clear()
         self.connection.close()
 
     def disconnected(self):
@@ -55,14 +61,30 @@ class Wayland:
             self.connection.sendall(packet)
 
     def receive(self):
-        object_id, size_opcode = struct.unpack("=II", receive_exact(
-                                              self.connection, WAYLAND_HEADER_SIZE))
+        object_id, size_opcode = struct.unpack("=II", self.receive_bytes(WAYLAND_HEADER_SIZE))
         size, opcode = size_opcode >> 16, size_opcode & 0xffff
         assert WAYLAND_HEADER_SIZE <= size <= WAYLAND_MESSAGE_LIMIT
-        payload = receive_exact(self.connection, size - WAYLAND_HEADER_SIZE)
+        payload = self.receive_bytes(size - WAYLAND_HEADER_SIZE)
         if object_id == WAYLAND_DISPLAY_ID and opcode == DISPLAY_ERROR:
             raise WaylandProtocolError(payload)
         return object_id, opcode, payload
+
+    def receive_bytes(self, size):
+        data = bytearray()
+        while len(data) < size:
+            chunk, ancillary, flags, _ = self.connection.recvmsg(
+                size - len(data), socket.CMSG_SPACE(WAYLAND_FD_LIMIT * array("i").itemsize),
+                socket.MSG_CMSG_CLOEXEC)
+            assert not flags & socket.MSG_CTRUNC
+            for level, type, values in ancillary:
+                if level == socket.SOL_SOCKET and type == socket.SCM_RIGHTS:
+                    descriptors = array("i")
+                    descriptors.frombytes(values)
+                    self.fds.extend(descriptors)
+            if not chunk:
+                raise RuntimeError("Wayland server closed the connection")
+            data.extend(chunk)
+        return bytes(data)
 
     def sync(self):
         self.roundtrip_events()
