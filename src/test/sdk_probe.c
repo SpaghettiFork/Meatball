@@ -7,6 +7,7 @@
 #include <exevents.h>
 #include <external.h>
 #include <present.h>
+#include <randrstr.h>
 #include <shmint.h>
 #include <xace.h>
 #include <xf86Module.h>
@@ -39,6 +40,10 @@ __attribute__ ((
     used)) static __typeof__ (&dri3_get_supported_modifiers) query_modifiers =
     dri3_get_supported_modifiers;
 #endif
+
+__attribute__ ((used)) static DevPrivateKey output_private_key = &rrPrivKeyRec;
+__attribute__ ((used)) static __typeof__ (&RRCrtcGetScanoutSize) output_size =
+    RRCrtcGetScanoutSize;
 
 static MODULESETUPPROTO (probe_setup);
 

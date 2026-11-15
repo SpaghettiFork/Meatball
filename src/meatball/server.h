@@ -10,6 +10,7 @@
 #include "native_cursor.h"
 #include "native_input.h"
 #include "native_keymap.h"
+#include "native_output.h"
 #include "native_shm.h"
 #include "native_subsurface.h"
 #include "native_surface.h"
@@ -35,6 +36,7 @@ typedef struct
     struct wl_list surfaces;
     struct wl_list clients;
     struct MbInput *input;
+    struct MbOutputs *outputs;
     struct wl_listener client_created;
     MbClient *bridge_client;
     int clients_fd;

@@ -100,7 +100,7 @@ meatball_initialize (const struct meatball_config *config)
         !mb_surfaces_initialize () || !mb_shm_initialize () ||
         !mb_xdg_initialize () || !mb_viewport_initialize () ||
         !mb_subsurfaces_initialize () || !mb_input_initialize () ||
-        !mb_loop_initialize ())
+        !mb_outputs_initialize () || !mb_loop_initialize ())
         goto fail;
     close (socket_fd);
     free (socket_fd_path);
@@ -120,6 +120,7 @@ void
 meatball_shutdown (void)
 {
     mb_loop_shutdown ();
+    mb_outputs_shutdown ();
     mb_input_shutdown ();
     mb_subsurfaces_shutdown ();
     mb_viewport_shutdown ();

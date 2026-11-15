@@ -39,6 +39,13 @@ if spaghetti_build_dir != ''
     test('native-interactive', python,
          args: ['-B', files('native_interactive.py'), test_host, sauce],
          timeout: 60)
+    output_probe = shared_module('meatball-output-probe', ['probe.c', 'output_probe.c'],
+                                 dependencies: [common_dep, meatball_headers],
+                                 c_args: ['-UNDEBUG'],
+                                 link_with: meatball)
+    test('native-outputs', python,
+         args: ['-B', files('native_outputs.py'), test_host, sauce, output_probe],
+         timeout: 60)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)

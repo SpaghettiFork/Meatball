@@ -111,6 +111,7 @@ class Wayland:
         self.send(WAYLAND_DISPLAY_ID, DISPLAY_SYNC, struct.pack("=I", callback))
         self.registry_id = registry
         globals_found = {}
+        self.global_entries = {}
         while True:
             object_id, opcode, payload = self.receive()
             if object_id == callback:
@@ -120,11 +121,17 @@ class Wayland:
                 name, length = struct.unpack_from("=II", payload)
                 version_offset = 8 + ((length + 3) & ~3)
                 version, = struct.unpack_from("=I", payload, version_offset)
-                globals_found[payload[8:8 + length - 1].decode("ascii")] = (name, version)
+                interface = payload[8:8 + length - 1].decode("ascii")
+                globals_found[interface] = (name, version)
+                self.global_entries[name] = (interface, version)
 
-    def bind(self, interface, version=None):
+    def bind(self, interface, version=None, name=None):
         globals_found = self.globals()
-        name, advertised_version = globals_found[interface]
+        if name is None:
+            name, advertised_version = globals_found[interface]
+        else:
+            found_interface, advertised_version = self.global_entries[name]
+            assert found_interface == interface
         if version is None:
             version = advertised_version
         assert 0 < version <= advertised_version
