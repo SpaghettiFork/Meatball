@@ -4,11 +4,13 @@
 
 #include <dixstruct.h>
 #include <dri3.h>
+#include <exevents.h>
 #include <external.h>
 #include <present.h>
 #include <shmint.h>
 #include <xace.h>
 #include <xf86Module.h>
+#include <xkbsrv.h>
 
 __attribute__ ((
     used)) static __typeof__ (&dixCreateExternalClient) create_client =
@@ -22,6 +24,10 @@ __attribute__ ((used)) static __typeof__ (&RRLeaseCreate) create_lease =
     RRLeaseCreate;
 __attribute__ ((used)) static __typeof__ (&RRTerminateLease) terminate_lease =
     RRTerminateLease;
+__attribute__ ((used)) static __typeof__ (&XISetEventMask) select_input =
+    XISetEventMask;
+__attribute__ ((used)) static RESTYPE *keyboard_subscription_type =
+    &RT_XKBCLIENT;
 #ifdef XACE
 __attribute__ ((
     used)) static __typeof__ (&XaceHookSendAccess) check_send_access =
