@@ -4,9 +4,13 @@
 #include "xdg-shell.h"
 
 #include <X11/Xatom.h>
+#include <X11/extensions/shapeconst.h>
 #include <inputstr.h>
+#include <limits.h>
 #include <property.h>
 #include <propertyst.h>
+#include <selection.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wayland-server-protocol.h>
@@ -33,6 +37,7 @@
 #define MOTIF_HINT_WORDS 5
 #define MOTIF_HINT_FLAGS 0
 #define MOTIF_HINT_DECORATIONS (1u << 1)
+#define COMPOSITOR_SELECTION_FORMAT "_NET_WM_CM_S%d"
 
 struct XdgBase
 {
@@ -65,7 +70,95 @@ struct MbXdgSurface
     XID window_id;
     uint64_t owner;
     CARD32 frame_extents[4];
+    Atom compositor_selection;
 };
+
+static Bool
+apply_bounds (MbSurface *surface, WindowPtr window)
+{
+    struct MbXdgSurface *xdg = surface->xdg;
+    RegionPtr bounds = NULL;
+
+    if (xdg && xdg->geometry_set && surface->pixels)
+    {
+        Selection *selection;
+        int result =
+            dixLookupSelection (&selection, xdg->compositor_selection,
+                                surface->client->native, DixGetAttrAccess);
+
+        if (result == BadAlloc)
+            return FALSE;
+        if (result != Success || selection->window == None)
+        {
+            BoxRec box = { xdg->frame_extents[0], xdg->frame_extents[2],
+                           surface->width - xdg->frame_extents[1],
+                           surface->height - xdg->frame_extents[3] };
+
+            bounds = RegionCreate (
+                box.x1 < box.x2 && box.y1 < box.y2 ? &box : NULL, 0);
+            if (!bounds)
+                return FALSE;
+        }
+    }
+    if ((!bounds && !wBoundingShape (window)) ||
+        (bounds && wBoundingShape (window) &&
+         RegionEqual (bounds, wBoundingShape (window))))
+    {
+        if (bounds)
+            RegionDestroy (bounds);
+        return TRUE;
+    }
+    if (!MakeWindowOptional (window))
+    {
+        if (bounds)
+            RegionDestroy (bounds);
+        return FALSE;
+    }
+    if (window->optional->boundingShape)
+        RegionDestroy (window->optional->boundingShape);
+    window->optional->boundingShape = bounds;
+    window->drawable.pScreen->SetShape (window, ShapeBounding);
+    SendShapeNotify (window, ShapeBounding);
+    return TRUE;
+}
+
+static void
+selection_changed (CallbackListPtr *callbacks, void *data, void *call_data)
+{
+    SelectionInfoRec *info = call_data;
+    MbSurface *surface;
+
+    wl_list_for_each (surface, &compositor.surfaces, link)
+    {
+        if (surface->xdg &&
+            surface->xdg->compositor_selection == info->selection->selection)
+        {
+            /* Selection destruction callbacks precede clearing the owner. */
+            compositor.xdg_shapes_dirty = TRUE;
+            return;
+        }
+    }
+}
+
+void
+mb_xdg_refresh_shapes (void)
+{
+    MbSurface *surface;
+
+    if (!compositor.xdg_shapes_dirty)
+        return;
+    compositor.xdg_shapes_dirty = FALSE;
+    wl_list_for_each (surface, &compositor.surfaces, link)
+    {
+        WindowPtr window;
+
+        if (!surface->xdg)
+            continue;
+        window = mb_window_get (&surface->window, DixSetAttrAccess);
+        if (window && !apply_bounds (surface, window))
+            wl_resource_post_no_memory (surface->resource);
+    }
+}
 
 static void
 base_unref (struct XdgBase *base)
@@ -172,8 +265,8 @@ reset_mapping (struct MbXdgSurface *xdg)
     memset (xdg->frame_extents, 0, sizeof (xdg->frame_extents));
     if (xdg->surface)
     {
-        WindowPtr window =
-            mb_window_get (&xdg->surface->window, DixSetPropAccess);
+        WindowPtr window = mb_window_get (&xdg->surface->window,
+                                          DixSetPropAccess | DixSetAttrAccess);
         const Atom properties[] = { compositor.atoms.net_wm_name,
                                     XA_WM_NAME,
                                     XA_WM_CLASS,
@@ -185,9 +278,13 @@ reset_mapping (struct MbXdgSurface *xdg)
         unsigned int i;
 
         if (window)
+        {
+            if (!apply_bounds (xdg->surface, window))
+                wl_resource_post_no_memory (xdg->surface->resource);
             for (i = 0; i < ARRAY_SIZE (properties); i++)
                 DeleteProperty (xdg->surface->client->native, window,
                                 properties[i]);
+        }
     }
     xdg->min_width = xdg->min_height = xdg->max_width = xdg->max_height = 0;
     xdg->hints_changed = TRUE;
@@ -681,6 +778,8 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     struct XdgBase *base = wl_resource_get_user_data (resource);
     MbSurface *surface = wl_resource_get_user_data (surface_resource);
     struct MbXdgSurface *xdg;
+    char selection_name[sizeof (COMPOSITOR_SELECTION_FORMAT) +
+                        sizeof (int) * CHAR_BIT];
 
     if (surface->xdg || surface->buffer || surface->pending_buffer)
     {
@@ -692,6 +791,16 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     xdg = calloc (1, sizeof (*xdg));
     if (!xdg)
     {
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    snprintf (selection_name, sizeof (selection_name),
+              COMPOSITOR_SELECTION_FORMAT, surface->window.screen->myNum);
+    xdg->compositor_selection =
+        MakeAtom (selection_name, strlen (selection_name), TRUE);
+    if (!xdg->compositor_selection)
+    {
+        free (xdg);
         wl_resource_post_no_memory (resource);
         return;
     }
@@ -882,7 +991,8 @@ mb_xdg_map (MbSurface *surface)
 
     if (!xdg || !xdg->toplevel)
         return TRUE;
-    window = mb_window_get (&surface->window, DixManageAccess);
+    window =
+        mb_window_get (&surface->window, DixManageAccess | DixSetAttrAccess);
     if (!window)
         return FALSE;
     if (xdg->geometry_set && surface->pixels)
@@ -906,6 +1016,8 @@ mb_xdg_map (MbSurface *surface)
                                      extents, TRUE) != Success)
             return FALSE;
     }
+    if (!apply_bounds (surface, window))
+        return FALSE;
     if (xdg->hints_changed)
     {
         CARD32 hints[WM_SIZE_HINT_WORDS] = { 0 };
@@ -1030,7 +1142,15 @@ mb_xdg_initialize (void)
     compositor.xdg_global =
         wl_global_create (compositor.wl_display, &xdg_wm_base_interface,
                           XDG_VERSION, NULL, bind_xdg);
-    return compositor.xdg_global != NULL;
+    if (!compositor.xdg_global)
+        return FALSE;
+    if (!AddCallback (&SelectionCallback, selection_changed, NULL))
+    {
+        wl_global_destroy (compositor.xdg_global);
+        compositor.xdg_global = NULL;
+        return FALSE;
+    }
+    return TRUE;
 }
 
 void
@@ -1038,7 +1158,9 @@ mb_xdg_shutdown (void)
 {
     if (compositor.xdg_global)
     {
+        DeleteCallback (&SelectionCallback, selection_changed, NULL);
         wl_global_destroy (compositor.xdg_global);
         compositor.xdg_global = NULL;
     }
+    compositor.xdg_shapes_dirty = FALSE;
 }

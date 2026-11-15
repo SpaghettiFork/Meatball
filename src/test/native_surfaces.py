@@ -19,6 +19,7 @@ VENDOR_LENGTH_OFFSET = 16
 FORMAT_COUNT_OFFSET = 21
 SHAPE_GET_RECTANGLES = 8
 SHAPE_INPUT = 2
+SHAPE_BOUNDING = 0
 WL_COMPOSITOR_CREATE_SURFACE = 0
 WL_COMPOSITOR_CREATE_REGION = 1
 WL_SURFACE_DESTROY = 0
@@ -47,7 +48,7 @@ def query_tree(x11, window):
     return set(struct.unpack(f"<{count}I", payload))
 
 
-def shape_rectangles(x11, window):
+def shape_rectangles(x11, window, kind=SHAPE_INPUT):
     name = b"SHAPE"
     padded = name + bytes(-len(name) % 4)
     x11.sendall(struct.pack("<BBHHH", QUERY_EXTENSION, 0, (8 + len(padded)) // 4,
@@ -56,7 +57,7 @@ def shape_rectangles(x11, window):
     assert reply[0] == 1 and reply[8]
     opcode = reply[9]
     x11.sendall(struct.pack("<BBHIB3x", opcode, SHAPE_GET_RECTANGLES, 3,
-                            window, SHAPE_INPUT))
+                            window, kind))
     reply = receive_exact(x11, X11_REPLY_SIZE)
     assert reply[0] == 1
     words, count = struct.unpack_from("<II", reply, 4)
