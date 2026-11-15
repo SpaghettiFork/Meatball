@@ -95,7 +95,8 @@ meatball_initialize (const struct meatball_config *config)
         goto fail;
     if (chmod (socket_fd_path, config->socket_mode) < 0)
         goto fail;
-    if (!mb_clients_initialize () || !mb_loop_initialize ())
+    if (!mb_windows_initialize () || !mb_clients_initialize () ||
+        !mb_loop_initialize ())
         goto fail;
     close (socket_fd);
     free (socket_fd_path);

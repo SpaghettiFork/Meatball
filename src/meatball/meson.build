@@ -3,6 +3,7 @@ srcs_meatball = [
     'meatball_log.c',
     'run.c',
     'native_client.c',
+    'native_window.c',
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

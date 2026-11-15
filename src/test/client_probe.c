@@ -33,6 +33,9 @@
 #define EXERCISE_NATIVE_CLOSE 9
 #define EXERCISE_CLOSE_IN_OUTPUT 10
 #define EXERCISE_FD_OVERFLOW 11
+#define EXERCISE_WINDOW 12
+#define EXERCISE_DESTROY_WINDOW 13
+#define RESULT_WINDOW_DESTROYED 5
 #define OUTPUT_STAGES 5
 #define U32_BITS 32
 
@@ -43,6 +46,7 @@ struct TestClient
     unsigned int outputs;
     Bool discard_output;
     Bool close_in_output;
+    MbWindow window;
 };
 
 static Bool inside_request;
@@ -250,6 +254,21 @@ exercise (struct wl_client *wayland, struct wl_resource *resource,
         }
         break;
     }
+    case EXERCISE_WINDOW:
+        assert (
+            mb_window_create (&test->window, client, screenInfo.screens[0]));
+        assert (mb_window_get (&test->window, DixGetAttrAccess));
+        wl_resource_post_event (resource, RESULT_EVENT, RESULT_OWNERSHIP,
+                                test->window.id,
+                                (uint32_t)(client->lifetime >> U32_BITS),
+                                (uint32_t)client->lifetime);
+        break;
+    case EXERCISE_DESTROY_WINDOW:
+        mb_window_destroy (&test->window);
+        assert (!test->window.id && mb_client_lookup (client->lifetime));
+        wl_resource_post_event (resource, RESULT_EVENT,
+                                RESULT_WINDOW_DESTROYED, 0, 0, 0);
+        break;
     default:
         assert (FALSE);
     }
@@ -274,6 +293,7 @@ resource_destroyed (struct wl_resource *resource)
 
     test->client->output = NULL;
     test->client->data = NULL;
+    mb_window_destroy (&test->window);
     free (test);
 }
 

@@ -7,7 +7,9 @@
 #include "meatball.h"
 #include "meatball_log.h"
 #include "native_client.h"
+#include "native_window.h"
 #include <dixstruct.h>
+#include <resource.h>
 #include <wayland-server-core.h>
 
 typedef struct
@@ -15,6 +17,8 @@ typedef struct
     struct wl_display *wl_display;
     struct wl_event_loop *wl_event_loop;
     char *socket_path;
+    struct MbAtoms atoms;
+    RESTYPE window_type;
     struct wl_list clients;
     struct wl_listener client_created;
     MbClient *bridge_client;
