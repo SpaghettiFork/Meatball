@@ -7,6 +7,7 @@
 #include "meatball.h"
 #include "meatball_log.h"
 #include "native_client.h"
+#include "native_input.h"
 #include "native_keymap.h"
 #include "native_shm.h"
 #include "native_subsurface.h"
@@ -32,6 +33,7 @@ typedef struct
     struct wl_global *subsurface_global;
     struct wl_list surfaces;
     struct wl_list clients;
+    struct MbInput *input;
     struct wl_listener client_created;
     MbClient *bridge_client;
     int clients_fd;

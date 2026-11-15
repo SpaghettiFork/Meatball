@@ -30,6 +30,9 @@ if spaghetti_build_dir != ''
     test('native-keymap', python,
          args: ['-B', files('native_keymap.py'), test_host, keymap_probe],
          timeout: 30)
+    test('native-input', python,
+         args: ['-B', files('native_input.py'), test_host, sauce],
+         timeout: 60)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)

@@ -65,30 +65,43 @@ def main():
                 wait_socket(path, process)
                 client = Wayland(path)
                 try:
+                    seat = client.bind("wl_seat")
+                    keyboard = client.allocate_id()
+                    client.send(seat, 1, struct.pack("=I", keyboard))
+                    client.sync()
+                    for fd in client.fds:
+                        os.close(fd)
+                    client.fds.clear()
                     test = client.bind(TEST_INTERFACE)
                     for layout, expected in ((0, ord("y")), (1, ord("z")), (0, ord("y"))):
                         client.send(test, 0, struct.pack("=I", layout))
-                        while True:
-                            object_id, opcode, data = client.receive()
-                            if object_id == test:
-                                assert opcode == 0
-                                break
-                        size, device = struct.unpack("=II", data)
-                        assert device > 0 and len(client.fds) == 1
-                        fd = client.fds.pop(0)
-                        try:
-                            assert fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
-                            assert os.fstat(fd).st_size == size
-                            text = os.pread(fd, size, 0)
-                            assert text.endswith(b"\0")
-                            assert parser.symbol(text, KEY_Y) == expected
-                            try:
-                                os.pwrite(fd, b"x", 0)
-                                raise AssertionError("keymap descriptor allowed writes")
-                            except OSError as error:
-                                assert error.errno == errno.EPERM
-                        finally:
-                            os.close(fd)
+                        events = client.roundtrip_events() + client.roundtrip_events()
+                        snapshots, maps = [], []
+                        for object_id, opcode, data in events:
+                            if object_id == test or (object_id == keyboard and opcode == 0):
+                                fd = client.fds.pop(0)
+                                try:
+                                    if object_id == test:
+                                        size, device = struct.unpack("=II", data)
+                                        assert device > 0
+                                        assert fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+                                        assert os.fstat(fd).st_size == size
+                                        text = os.pread(fd, size, 0)
+                                        assert text.endswith(b"\0")
+                                        snapshots.append(parser.symbol(text, KEY_Y))
+                                        try:
+                                            os.pwrite(fd, b"x", 0)
+                                            raise AssertionError("keymap descriptor allowed writes")
+                                        except OSError as error:
+                                            assert error.errno == errno.EPERM
+                                    else:
+                                        format, size = struct.unpack("=II", data)
+                                        assert format == XKB_KEYMAP_FORMAT_TEXT_V1
+                                        maps.append(parser.symbol(os.pread(fd, size, 0), KEY_Y))
+                                finally:
+                                    os.close(fd)
+                        assert snapshots == [expected], snapshots
+                        assert maps and maps[-1] == expected, maps
                     client.sync()
                 finally:
                     client.close()

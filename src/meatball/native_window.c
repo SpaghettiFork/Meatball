@@ -155,6 +155,8 @@ mb_window_create (MbWindow *window, MbClient *owner, ScreenPtr screen)
             MB_PROPERTY_FORMAT_32, PropModeReplace, 1, &pid, TRUE) != Success)
         goto fail;
     window->destroying = FALSE;
+    if (!mb_input_select_window (window, owner))
+        goto fail;
     return TRUE;
 
 fail:

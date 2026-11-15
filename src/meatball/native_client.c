@@ -67,6 +67,8 @@ client_write (ClientPtr native, int count, const void *data, void *closure)
     if (count)
         memcpy (client->bytes + client->length, data, count);
     client->length = needed;
+    if (!mb_input_observe_write (client, data, count))
+        goto fail;
     schedule_clients ();
     return count;
 
