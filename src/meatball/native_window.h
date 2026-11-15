@@ -16,6 +16,13 @@ struct MbAtoms
     Atom net_wm_name;
     Atom utf8_string;
     Atom net_wm_pid;
+    Atom net_wm_state;
+    Atom net_wm_fullscreen;
+    Atom net_wm_maximized_horz;
+    Atom net_wm_maximized_vert;
+    Atom net_wm_focused;
+    Atom wm_change_state;
+    Atom gtk_frame_extents;
 };
 
 typedef struct

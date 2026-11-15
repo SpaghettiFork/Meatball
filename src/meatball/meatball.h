@@ -45,7 +45,8 @@ struct meatball_config
 
 extern _X_EXPORT void meatball_version (unsigned long *version);
 
-/* Configuration storage remains owned by the caller. Failure releases all
+/* Call initialization and shutdown on Spaghetti's server thread.
+ * Configuration storage remains owned by the caller. Failure releases all
  * state allocated by this call. A running instance rejects initialization.
  */
 extern _X_EXPORT _MEATBALL_BOOL

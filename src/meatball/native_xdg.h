@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef MEATBALL_NATIVE_XDG_H
+#define MEATBALL_NATIVE_XDG_H
+
+#include "native_surface.h"
+
+struct MbXdgSurface;
+extern Bool mb_xdg_initialize (void);
+extern void mb_xdg_shutdown (void);
+extern Bool mb_xdg_commit (MbSurface *surface);
+extern Bool mb_xdg_map (MbSurface *surface);
+extern Bool mb_xdg_surface_destroy_request (MbSurface *surface);
+extern void mb_xdg_surface_destroyed (MbSurface *surface);
+extern void mb_xdg_event (MbSurface *surface, const xEvent *event);
+
+#endif

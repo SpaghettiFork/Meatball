@@ -16,6 +16,7 @@ struct MbSurface
     struct wl_list link;
     struct wl_resource *resource;
     MbClient *client;
+    struct MbXdgSurface *xdg;
     MbWindow window;
     struct wl_list pending_frames;
     struct wl_list frames;
