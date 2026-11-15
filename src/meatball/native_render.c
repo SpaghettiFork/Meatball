@@ -116,12 +116,11 @@ surface_picture (MbSurface *surface)
     return source;
 }
 
-Bool
-mb_surface_redraw (MbSurface *surface)
+PicturePtr
+mb_scene_picture (MbSurface *surface)
 {
-    WindowPtr window = mb_window_get (&surface->window, DixWriteAccess);
-    PicturePtr destination = NULL, canvas = NULL;
-    PixmapPtr pixels = NULL;
+    PicturePtr canvas = NULL;
+    PixmapPtr pixels;
     PictFormatPtr format;
     MbSceneIterator iterator = { .root = surface, .surface = surface };
     MbSurface *node;
@@ -129,56 +128,67 @@ mb_surface_redraw (MbSurface *surface)
     xRectangle rectangle = { 0, 0, surface->scene_width,
                              surface->scene_height };
     int error;
-    Bool success = FALSE;
 
-    if (!window || !window->realized || !surface->pixels)
-        return TRUE;
     format = PictureMatchFormat (surface->window.screen, MB_SHM_ARGB_DEPTH,
                                  PICT_a8r8g8b8);
-    if (!format)
-        return FALSE;
+    if (!format || !surface->pixels)
+        return NULL;
     pixels = surface->window.screen->CreatePixmap (
         surface->window.screen, surface->scene_width, surface->scene_height,
         MB_SHM_ARGB_DEPTH, 0);
     if (!pixels)
-        return FALSE;
+        return NULL;
     canvas = CreatePicture (FakeClientID (surface->client->native->index),
                             &pixels->drawable, format, 0, NULL,
                             surface->client->native, &error);
+    surface->window.screen->DestroyPixmap (pixels);
     if (!canvas)
-        goto out;
+        return NULL;
     CompositeRects (PictOpSrc, canvas, &clear, 1, &rectangle);
     while ((node = mb_scene_next (&iterator)))
     {
         PicturePtr source = surface_picture (node);
 
         if (!source)
-            goto out;
+            goto fail;
         CompositePicture (PictOpOver, source, NULL, canvas, 0, 0, 0, 0,
                           iterator.x - surface->scene_x,
                           iterator.y - surface->scene_y, node->width,
                           node->height);
         FreePicture (source, None);
     }
-    if (iterator.failed)
-        goto out;
-    format = PictureWindowFormat (window);
-    if (!format)
-        goto out;
-    destination = CreatePicture (FakeClientID (surface->client->native->index),
-                                 &window->drawable, format, 0, NULL,
-                                 surface->client->native, &error);
-    if (!destination)
-        goto out;
-    CompositePicture (PictOpSrc, canvas, NULL, destination, 0, 0, 0, 0, 0, 0,
-                      surface->scene_width, surface->scene_height);
-    success = TRUE;
+    if (!iterator.failed)
+        return canvas;
 
-out:
+fail:
+    FreePicture (canvas, None);
+    return NULL;
+}
+
+Bool
+mb_surface_redraw (MbSurface *surface)
+{
+    WindowPtr window = mb_window_get (&surface->window, DixWriteAccess);
+    PicturePtr destination = NULL, canvas;
+    PictFormatPtr format;
+    int error;
+
+    if (!window || !window->realized || !surface->pixels)
+        return TRUE;
+    canvas = mb_scene_picture (surface);
+    if (!canvas)
+        return FALSE;
+    format = PictureWindowFormat (window);
+    if (format)
+        destination = CreatePicture (
+            FakeClientID (surface->client->native->index), &window->drawable,
+            format, 0, NULL, surface->client->native, &error);
     if (destination)
+    {
+        CompositePicture (PictOpSrc, canvas, NULL, destination, 0, 0, 0, 0, 0,
+                          0, surface->scene_width, surface->scene_height);
         FreePicture (destination, None);
-    if (canvas)
-        FreePicture (canvas, None);
-    surface->window.screen->DestroyPixmap (pixels);
-    return success;
+    }
+    FreePicture (canvas, None);
+    return destination != NULL;
 }

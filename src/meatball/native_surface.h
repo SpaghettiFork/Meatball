@@ -4,6 +4,7 @@
 
 #include "native_shm.h"
 #include "native_window.h"
+#include <picture.h>
 #include <pixman.h>
 
 #define MB_COMPOSITOR_VERSION 4
@@ -17,6 +18,7 @@ typedef enum
     MB_ROLE_NONE,
     MB_ROLE_XDG,
     MB_ROLE_SUBSURFACE,
+    MB_ROLE_CURSOR,
 } MbSurfaceRole;
 
 typedef struct
@@ -96,6 +98,7 @@ struct MbSurface
     Bool frame_timer_armed;
 };
 
+extern PicturePtr mb_scene_picture (MbSurface *surface);
 extern Bool mb_surface_redraw (MbSurface *surface);
 extern Bool mb_surface_update (MbSurface *surface);
 extern void mb_surface_commit_apply (MbSurfaceCommit *commit);

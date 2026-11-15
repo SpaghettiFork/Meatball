@@ -43,9 +43,12 @@ Version 5 `wl_seat` exposes each enabled Xorg master pointer/keyboard pair.
 Pointer events follow committed surface-tree stacking and input regions, with
 implicit button grabs and wheel scrolling. Keyboard events follow native X11
 focus, with the server's current XKB keymap, modifiers, held keys, and repeat
-settings. Keymap changes and master-device hotplug update existing clients.
+settings. Keymap changes and master-device hotplug update existing clients. Client cursor
+surfaces use native ARGB cursors, including scale, transform, viewport, and
+subsurface composition. Cursor images and hotspot padding are limited to
+512 pixels per direction. Cursor frame callbacks use the surface timer.
 
-Present, DRI3 buffers, cursors, interactive move/resize, output globals, popups,
+Present, DRI3 buffers, interactive move/resize, output globals, popups,
 clipboard, drag and drop, settings, and leases remain to be ported. The next
 protocol globals after input are `wl_output` and `wl_data_device_manager`. Frame callbacks currently use a
 16 ms server-loop timer. Text-input-v3 is deferred.
