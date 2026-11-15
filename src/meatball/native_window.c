@@ -3,6 +3,8 @@
 #include "server.h"
 
 #include <X11/Xatom.h>
+#include <colormap.h>
+#include <picturestr.h>
 #include <property.h>
 #include <resource.h>
 #include <string.h>
@@ -57,8 +59,13 @@ mb_window_create (MbWindow *window, MbClient *owner, ScreenPtr screen)
 {
     WindowPtr native;
     XID id;
-    XID values[] = { screen->blackPixel,
-                     ExposureMask | StructureNotifyMask | PropertyChangeMask };
+    XID values[] = { 0, 0,
+                     ExposureMask | StructureNotifyMask | PropertyChangeMask,
+                     0 };
+    Mask attributes = CWBackPixel | CWBorderPixel | CWEventMask;
+    VisualID visual_id = CopyFromParent;
+    unsigned int depth = CopyFromParent;
+    int i, j, k;
     CARD32 protocols[] = { compositor.atoms.wm_delete_window };
     LocalClientCredRec *credentials;
     CARD32 pid;
@@ -67,29 +74,63 @@ mb_window_create (MbWindow *window, MbClient *owner, ScreenPtr screen)
 
     if (!owner || owner->failed || !owner->native || window->id)
         return FALSE;
+    window->owner = owner->lifetime;
+    window->screen = screen;
+    for (i = 0; i < screen->numDepths && visual_id == CopyFromParent; i++)
+    {
+        DepthPtr allowed = &screen->allowedDepths[i];
+
+        if (allowed->depth != MB_SHM_ARGB_DEPTH)
+            continue;
+        for (j = 0; j < allowed->numVids && visual_id == CopyFromParent; j++)
+            for (k = 0; k < screen->numVisuals; k++)
+            {
+                VisualPtr visual = &screen->visuals[k];
+                PictFormatPtr format;
+                ColormapPtr colormap;
+                XID colormap_id;
+
+                if (visual->vid != allowed->vids[j])
+                    continue;
+                format = PictureMatchVisual (screen, allowed->depth, visual);
+                if (!format || !format->direct.alphaMask)
+                    continue;
+                colormap_id = FakeClientID (owner->native->index);
+                if (CreateColormap (colormap_id, screen, visual, &colormap,
+                                    AllocNone,
+                                    owner->native->index) != Success)
+                    return FALSE;
+                window->colormap = colormap_id;
+                values[3] = colormap_id;
+                attributes |= CWColormap;
+                visual_id = visual->vid;
+                depth = allowed->depth;
+                break;
+            }
+    }
     id = FakeClientID (owner->native->index);
     if (!LegalNewID (id, owner->native))
-        return FALSE;
+        goto fail;
     native = CreateWindow (id, screen->root, 0, 0, MB_INITIAL_WINDOW_SIZE,
-                           MB_INITIAL_WINDOW_SIZE, 0, InputOutput,
-                           CWBackPixel | CWEventMask, values, CopyFromParent,
-                           owner->native, CopyFromParent, &error);
+                           MB_INITIAL_WINDOW_SIZE, 0, InputOutput, attributes,
+                           values, depth, owner->native, visual_id, &error);
     if (!native)
-        return FALSE;
+        goto fail;
     event_mask = native->eventMask;
     native->eventMask = NoEventMask;
     if (!AddResource (id, RT_WINDOW, native))
-        return FALSE;
+        goto fail;
     native->eventMask = event_mask;
     window->id = id;
-    window->owner = owner->lifetime;
-    window->screen = screen;
     /* The tracker uses the same XID, so FreeResource invalidates this handle
      * when a window or its native client is destroyed.
      */
     window->destroying = TRUE;
     if (!AddResource (id, compositor.window_type, window))
+    {
+        window->id = id;
         goto fail;
+    }
     if (dixChangeWindowProperty (
             owner->native, native, compositor.atoms.wm_protocols, XA_ATOM,
             MB_PROPERTY_FORMAT_32, PropModeReplace, ARRAY_SIZE (protocols),
@@ -107,9 +148,7 @@ mb_window_create (MbWindow *window, MbClient *owner, ScreenPtr screen)
     return TRUE;
 
 fail:
-    FreeResource (id, RT_NONE);
-    window->id = None;
-    window->destroying = FALSE;
+    mb_window_destroy (window);
     return FALSE;
 }
 
@@ -129,6 +168,9 @@ mb_window_get (MbWindow *window, Mask access)
 void
 mb_window_destroy (MbWindow *window)
 {
+    MbClient *owner = mb_client_lookup (window->owner);
+    ColormapPtr colormap;
+
     if (window->id)
     {
         window->destroying = TRUE;
@@ -136,4 +178,10 @@ mb_window_destroy (MbWindow *window)
         window->id = None;
         window->destroying = FALSE;
     }
+    if (window->colormap && owner &&
+        dixLookupResourceByType ((void **)&colormap, window->colormap,
+                                 RT_COLORMAP, owner->native,
+                                 DixDestroyAccess) == Success)
+        FreeResource (window->colormap, RT_NONE);
+    window->colormap = None;
 }
