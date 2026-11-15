@@ -11,12 +11,21 @@
 
 typedef struct MbSurface MbSurface;
 
+typedef struct
+{
+    Bool source_set, destination_set;
+    wl_fixed_t x, y, width, height;
+    int32_t destination_width, destination_height;
+} MbViewportState;
+
 struct MbSurface
 {
     struct wl_list link;
     struct wl_resource *resource;
     MbClient *client;
     struct MbXdgSurface *xdg;
+    struct MbViewport *viewport;
+    MbViewportState crop, pending_crop;
     MbWindow window;
     struct wl_list pending_frames;
     struct wl_list frames;

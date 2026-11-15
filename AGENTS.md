@@ -17,9 +17,12 @@ The native module currently handles core Wayland requests and version 4
 `wl_compositor` surfaces on Spaghetti's server thread, with native window
 ownership and committed input regions. SHM buffers use native imports and
 Render with an independent server copy for redraws. Buffer scales, all eight
-buffer transforms, and buffer-coordinate damage are supported. Version 1 xdg
-toplevels support configure acknowledgements, titles, application IDs, parent windows,
-size hints, WM state requests, close requests, unmapping, and remapping.
+buffer transforms, and buffer-coordinate damage are supported. Version 1
+`wp_viewporter` supports cropping and destination sizing, including fractional
+source rectangles. Surface dimensions are limited to 32767 in each direction.
+Version 1 xdg toplevels support configure acknowledgements, titles, application
+IDs, parent windows, size hints, WM state requests, close requests, unmapping,
+and remapping.
 
 This is an initial rendering checkpoint. Subsurfaces, Present,
 DRI3 buffers, Wayland input, output globals, popups, clipboard, drag and drop,
@@ -124,6 +127,8 @@ serials, WM messages and properties, size hints, parent inheritance, protocol
 errors, remapping, and resets.
 `native-transforms` checks all buffer orientations, integer scales, committed
 geometry, retained pixels after release, and invalid surface state.
+`native-viewport` checks cropped pixels across buffer orientations and scales,
+fractional rectangles, commit timing, protocol errors, destruction, and resets.
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is
