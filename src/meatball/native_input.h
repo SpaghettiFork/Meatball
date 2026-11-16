@@ -5,6 +5,10 @@
 #include "native_surface.h"
 
 struct MbInput;
+extern uint64_t mb_input_seat_id (struct wl_resource *resource);
+extern MbClient *mb_input_keyboard_client (uint64_t seat);
+extern Bool mb_input_selection_serial (uint64_t seat, MbClient *client,
+                                       uint32_t serial);
 typedef struct
 {
     DeviceIntPtr pointer;

@@ -19,6 +19,7 @@ srcs_meatball = [
     'native_client.c',
     'native_keymap.c',
     'native_input.c',
+    'native_data.c',
     'native_output.c',
     'native_cursor.c',
     'native_window.c',
