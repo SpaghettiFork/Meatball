@@ -1,42 +1,54 @@
 # Meatball.
 
-A Wayland implementation on X11, based upon 12to11 that lets Spaghetti users sleep with ease.
+A Wayland compatability layer that runs via the native X11 display server.
 
-## Supported platforms.
 
-> Software acceleration
+| | |
+|:---:|:---:|
+| ![Chromium via Wayland](.repo/images/brave.png) <br> **Chromium via Wayland on Meatball** | ![Firefox via Wayland](.repo/images/firefox.png) <br> **Firefox via Wayland on Meatball** |
+| ![GTK4 Wayland backend](.repo/images/gtk4.png) <br> **GTK4's Wayland backend on X11** | ![MPV wlshm backend](.repo/images/mpv.png) <br> **MPV's `wlshm` backend on X11** |
 
-- Anything.
+## FAQ
 
-> Hardware acceleration
+### Will this work on [Xorg distribution here]?
 
-- A video DDX with DRI3 v1.2 support [1] [2]
-- An EGL capable graphics card with the following extensions supported:
-  - `GL_OES_EGL_sync`
-  - `GL_OES_EGL_image`
-  - `GL_OES_EGL_image_external`
-  - `GL_EXT_read_format_bgra`
-  - `GL_EXT_unpack_subimage`
-  - `EGL_KHR_image_base`
-  - `EGL_EXT_platform_base`
-  - Either `EGL_EXT_device_drm_render_node` or `EGL_EXT_device_drm`
-- Additional optional but recommended extensions:
-  - `EGL_EXT_device_query`
-  - `EGL_EXT_image_dma_buf_import_modifiers`
-  - `EGL_KHR_fence_sync`
-  - `EGL_KHR_wait_sync`
-  - `EGL_ANDROID_native_fence_sync`
-  - `EGL_EXT_swap_buffers_with_damage`
-  - `EGL_EXT_buffer_age`
-  - `EGL_KHR_partial_update`
+Out of the box, no.
 
-[1] `modesetting` is the only video DDX that currently supports this.
+Meatball requires a set of patches that enables it to talk to Xorg directly and register external type clients to Xorg, who can then schedule and talk to them independently.
 
-[2] All graphics devices known to Spaghetti *MUST* support DRI3 v1.2 for it to be exposed.
 
-## Enabling Meatball
+### What is the state of this project?
 
-As of this commit, Meatball is not yet available.
+At the moment we support a Mimimum Viable Product set of Wayland features that enables
+basic applications to function, these are applications that mostly rely on either software presentation or rendering through  `wl_shm`.
+
+You should treat this project as alpha level of quality.
+
+Expect bugs, crashes and data loss!
+
+### How do I use this?
+
+You need a copy of Spaghetti from [this branch](https://github.com/notbabaisyou/SpaghettiDev/tree/meatball) along with this repository.
+
+```sh
+meson setup src/builddir src -Dspaghetti_build_dir=/path/to/spaghetti/build
+meson compile -C src/builddir
+meson test -C src/builddir --print-errorlogs
+```
+
+To set it up, you need to put `libsauce.so` into `/usr/lib/xorg/modules` and add this
+to your Xorg config.
+
+```conf
+Section "Module"
+    SubSection "sauce"
+        Option "SocketPath" "/run/user/1000/wayland-meatball-0"
+        Option "SocketMode" "0600"
+    EndSubSection
+EndSection
+```
+
+After that you can use `WAYLAND_DISPLAY=/run/user/1000/wayland-meatball-0` to run your Wayland applications.
 
 ## License
 
@@ -57,6 +69,9 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ```
+
+Meatball was derived from 12to11, hence it's respective license
+is included here.
 
 ```
 12to11, a Wayland compositor running on top of an X server.
