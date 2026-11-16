@@ -25,7 +25,7 @@
 typedef struct
 {
     Atom clipboard, targets, timestamp, incr, text, multiple, atom_pair;
-    Atom transfer;
+    Atom transfer, xdnd;
 } SelectionAtoms;
 
 typedef struct
@@ -36,6 +36,10 @@ typedef struct
 
 typedef struct
 {
+    struct wl_list link;
+    MbDataSource *source;
+    MbSelectionNotify notify;
+    void *data;
     Window owner;
     Atom selection;
     TimeStamp time;
@@ -61,14 +65,20 @@ struct Transfer
     TimeStamp epoch;
 };
 
+typedef struct
+{
+    struct wl_list link;
+    Window window;
+} ForeignWatch;
+
 struct MbSelections
 {
     SelectionAtoms atoms;
-    struct wl_list transfers;
+    struct wl_list transfers, imports, watches;
     Window window;
-    MbDataSource *exported, *imported;
+    MbDataSource *exported, *imported, *drag;
     uint64_t seat;
-    TimeStamp ownership;
+    TimeStamp ownership, drag_time;
     Bool dirty, registered, stopping;
 };
 
@@ -173,13 +183,60 @@ selection_notify (Transfer *transfer, Atom property)
         WriteEventsToClient (wClient (window), 1, &event);
 }
 
+static Bool
+refresh_watch (Window id)
+{
+    Transfer *transfer;
+    ForeignWatch *watch;
+    Mask mask = NoEventMask;
+    WindowPtr window = lookup_window (id, DixReceiveAccess);
+
+    if (!window)
+        return FALSE;
+    wl_list_for_each (watch, &compositor.selections->watches, link)
+    {
+        if (watch->window == id)
+            mask = SELECTION_EVENT_MASK;
+    }
+    wl_list_for_each (transfer, &compositor.selections->transfers, link)
+    {
+        if ((transfer->incoming ? transfer->owner : transfer->window) == id)
+            mask = SELECTION_EVENT_MASK;
+    }
+    return EventSelectForWindow (window, bridge (), mask) == Success;
+}
+
+Bool
+mb_selection_watch (Window id, Bool enable)
+{
+    ForeignWatch *watch;
+
+    wl_list_for_each (watch, &compositor.selections->watches, link)
+    {
+        if (watch->window == id)
+            break;
+    }
+    if (&watch->link == &compositor.selections->watches)
+    {
+        if (!enable)
+            return TRUE;
+        watch = calloc (1, sizeof (*watch));
+        if (!watch)
+            return FALSE;
+        watch->window = id;
+        wl_list_insert (&compositor.selections->watches, &watch->link);
+    }
+    if (!enable)
+    {
+        wl_list_remove (&watch->link);
+        free (watch);
+    }
+    return refresh_watch (id);
+}
+
 static void
 transfer_destroy (Transfer *transfer)
 {
-    Transfer *other;
-    WindowPtr window;
-    Bool watched = FALSE;
-
     wl_list_remove (&transfer->link);
     if (transfer->io)
         wl_event_source_remove (transfer->io);
@@ -194,17 +251,7 @@ transfer_destroy (Transfer *transfer)
     }
     else if (!transfer->notified)
         selection_notify (transfer, None);
-    Window watched_window =
-        transfer->incoming ? transfer->owner : transfer->window;
-
-    wl_list_for_each (other, &compositor.selections->transfers, link)
-    {
-        if ((other->incoming ? other->owner : other->window) == watched_window)
-            watched = TRUE;
-    }
-    window = lookup_window (watched_window, DixReceiveAccess);
-    if (!watched && window)
-        EventSelectForWindow (window, bridge (), NoEventMask);
+    refresh_watch (transfer->incoming ? transfer->owner : transfer->window);
     free (transfer);
 }
 
@@ -580,8 +627,11 @@ import_notify (void *data, MbSourceEvent event, const char *mime,
 {
     Import *import = data;
 
+    if (import->notify)
+        import->notify (import->data, event, mime, action);
     if (event != MB_SOURCE_DESTROYED)
         return;
+    wl_list_remove (&import->link);
     for (size_t i = 0; i < import->count; i++)
         free ((char *)import->types[i].mime);
     free (import);
@@ -592,31 +642,28 @@ static const MbDataSourceOps import_ops = {
     .notify = import_notify,
 };
 
-static void
-import_targets (Transfer *transfer)
+MbDataSource *
+mb_selection_import (Window owner, Atom selection, Time time,
+                     const CARD32 *targets, size_t count, uint32_t actions,
+                     MbSelectionNotify notify, void *data)
 {
-    struct MbSelections *selections = compositor.selections;
-    Selection *selection;
     const char *mimes[TARGET_LIMIT];
     Import *import;
     Atom text = None;
     MbDataSource *source;
 
-    if (dixLookupSelection (&selection, transfer->selection, bridge (),
-                            DixReadAccess) != Success ||
-        selection->window != transfer->owner ||
-        CompareTimeStamps (selection->lastTimeChanged, transfer->epoch) !=
-            SAMETIME)
-        return;
+    if (count > TARGET_LIMIT)
+        return NULL;
     import = calloc (1, sizeof (*import));
     if (!import)
-        return;
-    import->owner = transfer->owner;
-    import->selection = transfer->selection;
-    import->time = transfer->epoch;
-    for (size_t i = 0; i < transfer->atom_count; i++)
+        return NULL;
+    wl_list_insert (&compositor.selections->imports, &import->link);
+    import->owner = owner;
+    import->selection = selection;
+    import->time = ClientTimeToServerTime (time);
+    for (size_t i = 0; i < count; i++)
     {
-        Atom atom = transfer->atoms[i];
+        Atom atom = targets[i];
         const char *name = NameForAtom (atom);
 
         if (atom == compositor.atoms.utf8_string)
@@ -657,15 +704,79 @@ import_targets (Transfer *transfer)
         goto fail;
     for (size_t i = 0; i < import->count; i++)
         mimes[i] = import->types[i].mime;
-    source =
-        mb_data_source_create (mimes, import->count, 0, &import_ops, import);
+    source = mb_data_source_create (mimes, import->count, actions, &import_ops,
+                                    import);
     if (!source)
         goto fail;
-    selections->imported = source;
-    mb_data_import_selection (source);
-    return;
+    import->source = source;
+    import->notify = notify;
+    import->data = data;
+    return source;
 fail:
     import_notify (import, MB_SOURCE_DESTROYED, NULL, 0);
+    return NULL;
+}
+
+void
+mb_selection_time (MbDataSource *source, Time time)
+{
+    Import *import;
+
+    wl_list_for_each (import, &compositor.selections->imports, link)
+    {
+        if (import->source == source)
+            import->time = ClientTimeToServerTime (time);
+    }
+}
+
+static void
+import_targets (Transfer *transfer)
+{
+    struct MbSelections *selections = compositor.selections;
+    Selection *selection;
+    MbDataSource *source;
+
+    if (dixLookupSelection (&selection, transfer->selection, bridge (),
+                            DixReadAccess) != Success ||
+        selection->window != transfer->owner ||
+        CompareTimeStamps (selection->lastTimeChanged, transfer->epoch) !=
+            SAMETIME)
+        return;
+    source = mb_selection_import (transfer->owner, transfer->selection,
+                                  transfer->time, transfer->atoms,
+                                  transfer->atom_count, 0, NULL, NULL);
+    if (source)
+    {
+        selections->imported = source;
+        mb_data_import_selection (source);
+    }
+}
+
+Window
+mb_selection_window (void)
+{
+    return compositor.selections->window;
+}
+
+Bool
+mb_selection_claim_drag (MbDataSource *source)
+{
+    struct MbSelections *selections = compositor.selections;
+    Selection *selection;
+
+    selections->drag = source;
+
+    if (!bridge ())
+        return FALSE;
+    if (!source && (dixLookupSelection (&selection, selections->atoms.xdnd,
+                                        bridge (), DixReadAccess) != Success ||
+                    selection->window != selections->window))
+        return TRUE;
+    UpdateCurrentTime ();
+    selections->drag_time = currentTime;
+    return dixSetSelectionOwner (bridge (), selections->atoms.xdnd,
+                                 source ? selections->window : None,
+                                 currentTime) == Success;
 }
 
 static void
@@ -685,21 +796,26 @@ selection_request (const xEvent *event)
     const char *const *mimes;
     size_t count;
     Atom type = request.target;
+    MbDataSource *source =
+        request.selection == selections->atoms.clipboard ? selections->exported
+        : request.selection == selections->atoms.xdnd    ? selections->drag
+                                                         : NULL;
+    TimeStamp ownership = request.selection == selections->atoms.clipboard
+                              ? selections->ownership
+                              : selections->drag_time;
     int pipes[2];
 
     if (!request.property)
         request.property = request.target;
-    if (!selections->exported ||
-        request.selection != selections->atoms.clipboard ||
-        event->u.selectionRequest.owner != selections->window ||
+    if (!source || event->u.selectionRequest.owner != selections->window ||
         (request.time != CurrentTime &&
          CompareTimeStamps (ClientTimeToServerTime (request.time),
-                            selections->ownership) == EARLIER))
+                            ownership) == EARLIER))
         goto fail;
     window = lookup_window (request.window, DixSetPropAccess);
     if (!window)
         goto fail;
-    mimes = mb_data_source_mimes (selections->exported, &count);
+    mimes = mb_data_source_mimes (source, &count);
     if (request.target == selections->atoms.targets)
     {
         CARD32 targets[TARGET_LIMIT + 3];
@@ -727,7 +843,7 @@ selection_request (const xEvent *event)
     }
     if (request.target == selections->atoms.timestamp)
     {
-        CARD32 time = selections->ownership.milliseconds;
+        CARD32 time = ownership.milliseconds;
 
         if (!property_write (request.window, request.property, XA_INTEGER,
                              MB_PROPERTY_FORMAT_32, 1, &time))
@@ -752,10 +868,12 @@ selection_request (const xEvent *event)
     }
     if (!mime)
         goto fail;
-    wl_list_for_each (other, &selections->transfers,
-                      link) if (!other->incoming &&
-                                other->window == request.window &&
-                                other->property == request.property) goto fail;
+    wl_list_for_each (other, &selections->transfers, link)
+    {
+        if (!other->incoming && other->window == request.window &&
+            other->property == request.property)
+            goto fail;
+    }
     transfer = transfer_create (FALSE);
     if (!transfer)
         goto fail;
@@ -783,7 +901,7 @@ selection_request (const xEvent *event)
         close (pipes[1]);
         goto transfer_fail;
     }
-    if (!mb_data_source_send (selections->exported, mime, pipes[1]))
+    if (!mb_data_source_send (source, mime, pipes[1]))
         goto transfer_fail;
     return;
 transfer_fail:
@@ -811,7 +929,8 @@ bridge_output (MbClient *client, const void *message, size_t size)
     wl_list_for_each_safe (transfer, next, &compositor.selections->transfers,
                            link)
     {
-        if (type == DestroyNotify &&
+        if (type == DestroyNotify && !(event->u.u.type & SEND_EVENT_MASK) &&
+            !lookup_window (event->u.destroyNotify.window, DixGetAttrAccess) &&
             (event->u.destroyNotify.window == transfer->window ||
              event->u.destroyNotify.window == transfer->owner))
             transfer_destroy (transfer);
@@ -891,7 +1010,19 @@ source_destroyed (void *data, MbDataSource *source)
     if (source == selections->imported)
         selections->imported = NULL;
     if (source == selections->exported)
-        export_selection (data, selections->seat, NULL);
+    {
+        Selection *selection;
+
+        if (bridge () &&
+            dixLookupSelection (&selection, selections->atoms.clipboard,
+                                bridge (), DixReadAccess) == Success &&
+            selection->window == selections->window)
+            export_selection (data, selections->seat, NULL);
+        else
+            selections->exported = NULL;
+    }
+    if (source == selections->drag)
+        mb_selection_claim_drag (NULL);
 }
 
 static void
@@ -927,9 +1058,11 @@ mb_selections_dispatch (void)
     selections->exported = NULL;
     selections->imported = NULL;
     mb_data_import_selection (NULL);
-    wl_list_for_each_safe (transfer, next, &selections->transfers,
-                           link) if (transfer->incoming && transfer->targets)
-        transfer_destroy (transfer);
+    wl_list_for_each_safe (transfer, next, &selections->transfers, link)
+    {
+        if (transfer->incoming && transfer->targets)
+            transfer_destroy (transfer);
+    }
     if (!selection->window)
         return;
     transfer = incoming_create (selection->window, selection->selection,
@@ -951,12 +1084,15 @@ mb_selections_initialize (void)
         return FALSE;
     compositor.selections = selections;
     wl_list_init (&selections->transfers);
+    wl_list_init (&selections->imports);
+    wl_list_init (&selections->watches);
     struct
     {
         const char *name;
         Atom *atom;
     } atoms[] = {
         { "CLIPBOARD", &selections->atoms.clipboard },
+        { "XdndSelection", &selections->atoms.xdnd },
         { "TARGETS", &selections->atoms.targets },
         { "TIMESTAMP", &selections->atoms.timestamp },
         { "INCR", &selections->atoms.incr },
@@ -991,16 +1127,30 @@ mb_selections_shutdown (void)
 {
     struct MbSelections *selections = compositor.selections;
     Transfer *transfer, *next;
+    ForeignWatch *watch, *next_watch;
+    Import *import, *next_import;
 
     if (!selections)
         return;
     selections->stopping = TRUE;
+
+    wl_list_for_each_safe (watch, next_watch, &selections->watches, link)
+    {
+        mb_selection_watch (watch->window, FALSE);
+    }
+
+    wl_list_for_each_safe (import, next_import, &selections->imports, link)
+    {
+        mb_data_source_destroy (import->source);
+    }
     mb_data_set_bridge (NULL, NULL);
     if (selections->registered)
         DeleteCallback (&SelectionCallback, selection_changed, selections);
     compositor.bridge_client->output = NULL;
     wl_list_for_each_safe (transfer, next, &selections->transfers, link)
+    {
         transfer_destroy (transfer);
+    }
     if (lookup_window (selections->window, DixDestroyAccess))
         FreeResource (selections->window, RT_NONE);
     free (selections);

@@ -27,6 +27,7 @@ run.c                     server loop integration
 native_client.c/.h        per-connection native resources and FD transfer
 native_cursor.c/.h        client cursor surfaces as native cursors
 native_data.c/.h          clipboard and drag-and-drop transfers
+native_selection.c/.h     asynchronous X11 selection conversions
 native_input.c/.h         pointer and keyboard routing, grabs
 native_keymap.c/.h        sealed keymap descriptors
 native_output.c/.h        wl_output globals and surface membership
@@ -365,7 +366,14 @@ The receive callback takes ownership of the destination FD. Source notifications
 cover target, action, drop, completion, cancellation, and destruction; providers
 must defer source destruction until notification handling returns. Native
 sources share MIME validation and offer lifetime handling with Wayland sources.
-`MbDataBridge` observes local selection changes and source destruction.
+`MbDataBridge` observes local selection changes, seat retirement, and source
+destruction. `native_selection` shares its transfer engine between `CLIPBOARD`
+and `XdndSelection`. Imported sources retain a MIME-to-atom mapping and a
+conversion timestamp; their provider notifications can drive drag negotiation.
+Foreign window watches remain selected while either a drag or an active
+transfer refers to that window. Releasing one selection does not clear another
+client's newer ownership. The matching Spaghetti SDK already provides the
+selection and property APIs used by this bridge; no server ABI change is needed.
 `mb_data_import_selection` publishes a foreign selection to active seats and
 newly created data devices. These are private module interfaces; configuration
 ABI 2.0 and the Xorg extension ABI remain unchanged.

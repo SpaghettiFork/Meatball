@@ -143,10 +143,10 @@ class XSelections:
         self.send(24, 0, struct.pack("<IIIII", self.window, self.atom(selection),
                                     target, self.property if property is None else property, 0))
 
-    def result(self):
+    def result(self, selection="CLIPBOARD"):
         event = self.event(SELECTION_NOTIFY)
-        _, requestor, selection, target, property = struct.unpack_from("<IIIII", event, 4)
-        assert requestor == self.window and selection == self.atom("CLIPBOARD")
+        _, requestor, selected, target, property = struct.unpack_from("<IIIII", event, 4)
+        assert requestor == self.window and selected == self.atom(selection)
         if not property:
             return None
         # PropertyNotify for the initial result precedes SelectionNotify.
