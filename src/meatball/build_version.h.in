@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef MEATBALL_BUILD_VERSION_H
+#define MEATBALL_BUILD_VERSION_H
+
+#define MEATBALL_BUILD_ID "@VCS_TAG@"
+
+#endif

@@ -1,3 +1,11 @@
+build_version = vcs_tag(
+    input: 'build_version.h.in',
+    output: 'build_version.h',
+    fallback: meson.project_version(),
+    command: ['git', '-C', meson.project_source_root(),
+              'describe', '--always', '--dirty', '--exclude=*'],
+)
+
 scanner = find_program('wayland-scanner', native: true)
 xdg_header = custom_target('native-xdg-header',
                            input: 'wayland-proto/xdg-shell.xml', output: 'xdg-shell.h',
@@ -14,6 +22,7 @@ viewport_code = custom_target('native-viewport-code',
 
 srcs_meatball = [
     'meatball.c',
+    build_version,
     'meatball_log.c',
     'run.c',
     'native_client.c',
