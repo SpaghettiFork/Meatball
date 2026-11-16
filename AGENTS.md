@@ -248,9 +248,20 @@ transparent pixels. Icons support buffer offsets, transforms, viewports, and
 subsurfaces. Source cursor changes continue during the drag. Disconnects,
 device removal, and server reset cancel pending transfers.
 
+X11 `CLIPBOARD` ownership is bridged in both directions through server APIs.
+The latest authenticated Wayland selection owns the global X11 clipboard;
+foreign X11 selections are offered to every Wayland seat. Selection conversion
+supports `TARGETS`, `TIMESTAMP`, `UTF8_STRING`, `TEXT`, and MIME-named targets.
+Legacy X11 `STRING` imports are converted from Latin-1 to UTF-8. Transfers use
+nonblocking pipes and the ICCCM `INCR` handshake, with 64 KiB buffers, up to 32
+concurrent conversions, and a 10 second inactivity timeout. Slow readers apply
+backpressure without blocking the server. Destroyed requestors, reader hangups,
+owner disconnects, and resets clean up pending conversions. Selection ownership
+and transfer windows are unmapped InputOnly windows. X11 `MULTIPLE` conversions
+and legacy `STRING` export are not implemented yet.
+
 ## Still to port
 
-- X11 clipboard selections.
 - Xdnd interoperability.
 - Primary selection.
 - Present.
@@ -320,6 +331,10 @@ Every check runs against the isolated module test host.
 - `native-data` checks clipboard focus and serial validation, source
   replacement, MIME offers, large and blocked transfers, protocol versions,
   disconnects, and reset cleanup.
+- `native-selections` checks X11 clipboard ownership, text and binary MIME
+  negotiation, timestamps, unsupported targets, small and large transfers in
+  both directions, INCR backpressure, blocked readers, Latin-1 imports,
+  ownership replacement, owner disconnects, and resets.
 - `native-drag` checks native pointer grabs, destination movement,
   copy/move/ask negotiation, pre-drop and post-drop transfers, legacy clients,
   multiple device bindings, source-less drags, cancellation, role and action
