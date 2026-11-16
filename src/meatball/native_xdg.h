@@ -8,6 +8,8 @@ struct MbXdgSurface;
 extern Bool mb_xdg_initialize (void);
 extern void mb_xdg_shutdown (void);
 extern void mb_xdg_refresh_shapes (void);
+extern Bool mb_xdg_constrain_scene (MbSurface *surface,
+                                    pixman_box32_t *bounds);
 extern Bool mb_xdg_commit (MbSurface *surface);
 extern Bool mb_xdg_map (MbSurface *surface);
 extern Bool mb_xdg_surface_destroy_request (MbSurface *surface);

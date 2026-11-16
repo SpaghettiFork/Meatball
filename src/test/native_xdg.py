@@ -289,6 +289,10 @@ def check_parents_and_geometry(x11, root, path):
         callback = client.frame()
         client.commit()
         client.frame_done(callback)
+        # Leave the initial maximized state before testing normal shadow hints.
+        x11.sendall(struct.pack("<BBHIIIB3xI", CHANGE_PROPERTY, 0, 6, first_window,
+                                intern_atom(x11, "_NET_WM_STATE"), XA_ATOM, 32, 0))
+        client.configure()
         client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", 1, 0, 1, HEIGHT))
         client.send(client.top, TOP_MIN_SIZE, struct.pack("=ii", 1, 1))
         client.send(client.top, TOP_MAX_SIZE, struct.pack("=ii", 100, 0))

@@ -6,14 +6,17 @@ import sys
 import tempfile
 
 from host_support import connect_x11, receive_exact, server
-from native_clients import intern_atom
+from native_clients import intern_atom, XA_ATOM
 from native_input import (XInput, InputClient, map_window, GET_INPUT_FOCUS,
                           X11_REPLY_SIZE, MOTION, BUTTON_PRESS, BUTTON_RELEASE)
 from native_lifecycle import wait_socket
-from native_subsurfaces import publish, solid, BLUE, RED
+from native_subsurfaces import (publish, solid, BLUE, RED, child,
+                                DESTROY, ATTACH, COMMIT)
 from native_surfaces import root_window, query_tree
+from native_transforms import dimensions, wait_image
 from native_xdg import (XDG_GEOMETRY, TOP_MIN_SIZE, TOP_MAX_SIZE,
-                        CHANGE_ATTRIBUTES, CW_EVENT_MASK)
+                        CHANGE_ATTRIBUTES, CW_EVENT_MASK, CHANGE_PROPERTY,
+                        SEND_EVENT_FLAG)
 
 QUERY_EXTENSION = 98
 SHAPE_SELECT_INPUT = 6
@@ -34,6 +37,11 @@ POINTER_POSITION = 40
 SCROLL_DOWN = 5
 REPAINT_COUNT = 12
 SURFACE_SIZE = 64
+STATUS_WIDTH = 20
+STATUS_HEIGHT = 25
+STATUS_Y = SURFACE_SIZE - STATUS_HEIGHT + 1
+PROPERTY_FORMAT = 32
+PROPERTY_REPLACE = 0
 
 
 class Watcher:
@@ -142,6 +150,55 @@ def check_repaints(path, display):
         x11.close()
 
 
+def check_maximized_subsurfaces(path, display, fullscreen=False):
+    x11, setup = connect_x11(display, return_setup=True)
+    root = root_window(setup)
+    before = query_tree(x11, root)
+    client = InputClient(path)
+    watcher = None
+    try:
+        window, = query_tree(x11, root) - before
+        client.send(client.xdg, XDG_GEOMETRY,
+                    struct.pack("=iiii", 0, 0, SURFACE_SIZE, SURFACE_SIZE))
+        map_window(client, x11, root, window=window)
+        state = intern_atom(x11, "_NET_WM_STATE")
+        names = (("_NET_WM_STATE_FULLSCREEN",) if fullscreen else
+                 ("_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT"))
+        maximized = [intern_atom(x11, name) for name in names]
+        x11.sendall(struct.pack("<BBHIIIB3xI", CHANGE_PROPERTY, PROPERTY_REPLACE,
+                                6 + len(maximized), window, state, XA_ATOM,
+                                PROPERTY_FORMAT, len(maximized)) + struct.pack(f"<{len(maximized)}I", *maximized))
+        client.configure()
+        client.sync()
+        watcher = Watcher(display, window)
+        for _ in range(REPAINT_COUNT):
+            status, role = child(client, client.surface, -1, STATUS_Y, desync=True)
+            client.commit()
+            publish(client, status, solid(BLUE, STATUS_WIDTH, STATUS_HEIGHT))
+            client.sync()
+            assert dimensions(x11, window) == (SURFACE_SIZE, SURFACE_SIZE)
+            expected = tuple(tuple(BLUE if y >= STATUS_Y and x < STATUS_WIDTH - 1 else RED
+                                   for x in range(SURFACE_SIZE)) for y in range(SURFACE_SIZE))
+            wait_image(x11, window, expected)
+            events = client.roundtrip_events()
+            assert not any(obj == client.top and opcode == 0 for obj, opcode, _ in events), events
+            changes = watcher.events()
+            assert not any(event[0] & ~SEND_EVENT_FLAG == CONFIGURE_NOTIFY
+                           for event in changes), [event.hex() for event in changes]
+            client.send(status, ATTACH, struct.pack("=Iii", 0, 0, 0))
+            client.send(status, COMMIT)
+            client.send(role, DESTROY)
+            client.send(status, DESTROY)
+            client.sync()
+            assert dimensions(x11, window) == (SURFACE_SIZE, SURFACE_SIZE)
+            wait_image(x11, window, solid(RED, SURFACE_SIZE, SURFACE_SIZE))
+    finally:
+        if watcher:
+            watcher.close()
+        client.close()
+        x11.close()
+
+
 def main():
     host, module = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="meatball-geometry-") as directory:
@@ -150,6 +207,8 @@ def main():
                     arguments=["+extension", "XTEST"]) as (process, display):
             wait_socket(path, process)
             check_repaints(path, display)
+            check_maximized_subsurfaces(path, display)
+            check_maximized_subsurfaces(path, display, fullscreen=True)
             assert process.poll() is None
 
 
