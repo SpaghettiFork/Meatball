@@ -35,7 +35,7 @@ enum SourceUse
     SOURCE_DRAG,
 };
 
-struct DataSource
+struct MbDataSource
 {
     struct wl_list link;
     struct wl_resource *resource;
@@ -44,6 +44,8 @@ struct DataSource
     enum SourceUse use;
     uint32_t actions;
     Bool actions_set, cancelled;
+    const MbDataSourceOps *ops;
+    void *data;
 };
 
 struct DataSeat
@@ -52,7 +54,7 @@ struct DataSeat
     uint64_t id, focus;
     Bool removed, serial_set;
     uint32_t selection_serial;
-    struct DataSource *selection;
+    struct MbDataSource *selection;
     struct DataDrag *drag;
 };
 
@@ -68,7 +70,7 @@ struct DataOffer
 {
     struct wl_list link;
     struct wl_resource *resource;
-    struct DataSource *source;
+    struct MbDataSource *source;
     uint64_t seat;
     Bool active, drag_offer, finished;
     struct DataDrag *drag;
@@ -91,7 +93,7 @@ struct DataDrag
     struct wl_list link, targets;
     struct DataSeat *seat;
     struct DataDevice *origin_device;
-    struct DataSource *source;
+    struct MbDataSource *source;
     MbSurface *origin, *icon, *focus;
     uint64_t origin_client;
     uint32_t enter_serial, source_action;
@@ -105,6 +107,9 @@ struct MbData
 {
     struct wl_global *global;
     struct wl_list seats, devices, sources, offers, drags;
+    MbDataSource *imported;
+    const MbDataBridge *bridge;
+    void *bridge_data;
 };
 
 static void send_selection (struct DataDevice *device);
@@ -118,7 +123,7 @@ release (struct wl_client *client, struct wl_resource *resource)
 }
 
 static const char *
-find_mime (struct DataSource *source, const char *mime)
+find_mime (struct MbDataSource *source, const char *mime)
 {
     size_t i;
 
@@ -126,6 +131,87 @@ find_mime (struct DataSource *source, const char *mime)
         if (!strcmp (source->mimes[i], mime))
             return source->mimes[i];
     return NULL;
+}
+
+static uint32_t
+source_version (MbDataSource *source)
+{
+    return source->resource ? wl_resource_get_version (source->resource)
+                            : DATA_VERSION;
+}
+
+static void
+source_notify (MbDataSource *source, MbSourceEvent event, const char *mime,
+               uint32_t action)
+{
+    if (source->ops && source->ops->notify)
+    {
+        source->ops->notify (source->data, event, mime, action);
+        return;
+    }
+    if (!source->resource)
+        return;
+    switch (event)
+    {
+    case MB_SOURCE_TARGET:
+        wl_data_source_send_target (source->resource, mime);
+        break;
+    case MB_SOURCE_ACTION:
+        if (source_version (source) >= WL_DATA_SOURCE_ACTION_SINCE_VERSION)
+            wl_data_source_send_action (source->resource, action);
+        break;
+    case MB_SOURCE_DROP:
+        if (source_version (source) >=
+            WL_DATA_SOURCE_DND_DROP_PERFORMED_SINCE_VERSION)
+            wl_data_source_send_dnd_drop_performed (source->resource);
+        break;
+    case MB_SOURCE_FINISHED:
+        if (source_version (source) >=
+            WL_DATA_SOURCE_DND_FINISHED_SINCE_VERSION)
+            wl_data_source_send_dnd_finished (source->resource);
+        break;
+    case MB_SOURCE_CANCELLED:
+        wl_data_source_send_cancelled (source->resource);
+        break;
+    case MB_SOURCE_DESTROYED:
+        break;
+    }
+}
+
+Bool
+mb_data_source_send (MbDataSource *source, const char *mime, int fd)
+{
+    if (!source || !find_mime (source, mime))
+    {
+        close (fd);
+        return FALSE;
+    }
+    if (source->ops)
+    {
+        source->ops->receive (source->data, mime, fd);
+        return TRUE;
+    }
+    if (source->resource)
+    {
+        wl_data_source_send_send (source->resource, mime, fd);
+        close (fd);
+        return TRUE;
+    }
+    close (fd);
+    return FALSE;
+}
+
+const char *const *
+mb_data_source_mimes (MbDataSource *source, size_t *count)
+{
+    *count = source->mime_count;
+    return (const char *const *)source->mimes;
+}
+
+uint32_t
+mb_data_source_actions (MbDataSource *source)
+{
+    return source->actions;
 }
 
 static void
@@ -153,16 +239,24 @@ announce_selection (struct DataSeat *seat)
     }
 }
 
-static void
-source_destroyed (struct wl_resource *resource)
+void
+mb_data_source_destroy (MbDataSource *source)
 {
-    struct DataSource *source = wl_resource_get_user_data (resource);
     struct DataOffer *offer;
     struct DataSeat *seat;
     struct DataDrag *drag, *next_drag;
     size_t i;
 
-    source->resource = NULL;
+    if (source->resource)
+    {
+        wl_resource_destroy (source->resource);
+        return;
+    }
+    if (compositor.data->bridge)
+        compositor.data->bridge->destroyed (compositor.data->bridge_data,
+                                            source);
+    if (compositor.data->imported == source)
+        compositor.data->imported = NULL;
     wl_list_for_each_safe (drag, next_drag, &compositor.data->drags, link)
     {
         if (drag->source == source)
@@ -185,6 +279,7 @@ source_destroyed (struct wl_resource *resource)
             announce_selection (seat);
         }
     }
+    source_notify (source, MB_SOURCE_DESTROYED, NULL, 0);
     for (i = 0; i < source->mime_count; i++)
         free (source->mimes[i]);
     free (source->mimes);
@@ -193,10 +288,97 @@ source_destroyed (struct wl_resource *resource)
 }
 
 static void
+source_destroyed (struct wl_resource *resource)
+{
+    MbDataSource *source = wl_resource_get_user_data (resource);
+
+    source->resource = NULL;
+    wl_resource_set_user_data (resource, NULL);
+    mb_data_source_destroy (source);
+}
+
+MbDataSource *
+mb_data_source_create (const char *const *mimes, size_t count,
+                       uint32_t actions, const MbDataSourceOps *ops,
+                       void *data)
+{
+    MbDataSource *source;
+    size_t i;
+
+    if (!count || count > SOURCE_MIME_LIMIT || !ops || !ops->receive ||
+        (actions & ~DATA_ACTIONS))
+        return NULL;
+    source = calloc (1, sizeof (*source));
+    if (!source)
+        return NULL;
+    wl_list_insert (compositor.data->sources.prev, &source->link);
+    source->mimes = calloc (count, sizeof (*source->mimes));
+    if (!source->mimes)
+        goto fail;
+    for (i = 0; i < count; i++)
+    {
+        size_t size = strlen (mimes[i]) + 1;
+
+        if (find_mime (source, mimes[i]))
+            continue;
+        if (size > MIME_LENGTH_LIMIT ||
+            size > SOURCE_MIME_BYTES_LIMIT - source->mime_bytes)
+            goto fail;
+        source->mimes[source->mime_count] = strdup (mimes[i]);
+        if (!source->mimes[source->mime_count])
+            goto fail;
+        source->mime_count++;
+        source->mime_bytes += size;
+    }
+    source->actions = actions;
+    source->actions_set = TRUE;
+    source->ops = ops;
+    source->data = data;
+    return source;
+
+fail:
+    mb_data_source_destroy (source);
+    return NULL;
+}
+
+void
+mb_data_set_bridge (const MbDataBridge *bridge, void *data)
+{
+    compositor.data->bridge = bridge;
+    compositor.data->bridge_data = data;
+}
+
+void
+mb_data_import_selection (MbDataSource *source)
+{
+    struct DataSeat *seat;
+    MbDataSource *previous = compositor.data->imported;
+
+    compositor.data->imported = source;
+    if (source)
+        source->use = SOURCE_SELECTION;
+    wl_list_for_each (seat, &compositor.data->seats, link)
+    {
+        if (seat->removed)
+            continue;
+        if (seat->selection && seat->selection != source)
+        {
+            seat->selection->cancelled = TRUE;
+            source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
+        }
+        invalidate_selection (seat);
+        seat->selection = source;
+        announce_selection (seat);
+    }
+    if (previous && previous != source)
+        mb_data_source_destroy (previous);
+}
+
+static void
 source_offer (struct wl_client *client, struct wl_resource *resource,
               const char *mime)
 {
-    struct DataSource *source = wl_resource_get_user_data (resource);
+    struct MbDataSource *source = wl_resource_get_user_data (resource);
     size_t size = strlen (mime) + 1;
     char **mimes, *copy;
 
@@ -238,7 +420,7 @@ static void
 source_actions (struct wl_client *client, struct wl_resource *resource,
                 uint32_t actions)
 {
-    struct DataSource *source = wl_resource_get_user_data (resource);
+    struct MbDataSource *source = wl_resource_get_user_data (resource);
 
     if (actions & ~DATA_ACTIONS)
     {
@@ -267,7 +449,7 @@ static void
 create_source (struct wl_client *client, struct wl_resource *resource,
                uint32_t id)
 {
-    struct DataSource *source = calloc (1, sizeof (*source));
+    struct MbDataSource *source = calloc (1, sizeof (*source));
 
     if (!source)
         goto fail;
@@ -305,8 +487,8 @@ offer_accept (struct wl_client *client, struct wl_resource *resource,
         return;
     offer->accepted = mime ? find_mime (offer->source, mime) : NULL;
     drag->winner = offer;
-    if (drag->source && drag->source->resource)
-        wl_data_source_send_target (drag->source->resource, offer->accepted);
+    if (drag->source)
+        source_notify (drag->source, MB_SOURCE_TARGET, offer->accepted, 0);
     update_action (offer);
 }
 
@@ -319,9 +501,11 @@ offer_receive (struct wl_client *client, struct wl_resource *resource,
     if (offer->finished)
         wl_resource_post_error (resource, WL_DATA_OFFER_ERROR_INVALID_OFFER,
                                 "data offer has already been finished");
-    else if (offer->active && offer->source && offer->source->resource &&
-             find_mime (offer->source, mime))
-        wl_data_source_send_send (offer->source->resource, mime, fd);
+    else if (offer->active && offer->source)
+    {
+        mb_data_source_send (offer->source, mime, fd);
+        return;
+    }
     close (fd);
 }
 
@@ -340,10 +524,8 @@ offer_finish (struct wl_client *client, struct wl_resource *resource)
         return;
     }
     offer->finished = TRUE;
-    if (drag->ask && drag->source->resource &&
-        wl_resource_get_version (drag->source->resource) >=
-            WL_DATA_SOURCE_ACTION_SINCE_VERSION)
-        wl_data_source_send_action (drag->source->resource, offer->action);
+    if (drag->ask)
+        source_notify (drag->source, MB_SOURCE_ACTION, NULL, offer->action);
     end_drag (drag, TRUE);
 }
 
@@ -398,8 +580,8 @@ offer_destroyed (struct wl_resource *resource)
         if (drag->dropped)
             end_drag (drag, wl_resource_get_version (resource) <
                                 WL_DATA_OFFER_FINISH_SINCE_VERSION);
-        else if (drag->source && drag->source->resource)
-            wl_data_source_send_target (drag->source->resource, NULL);
+        else if (drag->source)
+            source_notify (drag->source, MB_SOURCE_TARGET, NULL, 0);
     }
     wl_list_remove (&offer->link);
     free (offer);
@@ -414,7 +596,7 @@ static const struct wl_data_offer_interface offer_implementation = {
 };
 
 static struct DataOffer *
-create_offer (struct DataDevice *device, struct DataSource *source,
+create_offer (struct DataDevice *device, struct MbDataSource *source,
               struct DataDrag *drag)
 {
     struct DataOffer *offer = calloc (1, sizeof (*offer));
@@ -457,7 +639,7 @@ fail:
 static void
 send_selection (struct DataDevice *device)
 {
-    struct DataSource *source = device->seat->selection;
+    struct MbDataSource *source = device->seat->selection;
     struct DataOffer *offer;
 
     if (!source || device->seat->removed)
@@ -476,7 +658,7 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
 {
     struct DataDevice *device = wl_resource_get_user_data (resource);
     struct DataSeat *seat = device->seat;
-    struct DataSource *source =
+    struct MbDataSource *source =
         source_resource ? wl_resource_get_user_data (source_resource) : NULL;
 
     if (seat->removed ||
@@ -500,7 +682,7 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
     if (seat->selection)
     {
         seat->selection->cancelled = TRUE;
-        wl_data_source_send_cancelled (seat->selection->resource);
+        source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
     }
     invalidate_selection (seat);
     seat->selection = source;
@@ -509,6 +691,9 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
     if (source)
         source->use = SOURCE_SELECTION;
     announce_selection (seat);
+    if (compositor.data->bridge)
+        compositor.data->bridge->selection (compositor.data->bridge_data,
+                                            seat->id, source);
 }
 
 static void
@@ -546,13 +731,11 @@ update_action (struct DataOffer *offer)
     if (!drag->winner || drag->winner == offer)
     {
         if ((!drag->action_sent || drag->source_action != action) &&
-            drag->source && drag->source->resource)
+            drag->source)
         {
             drag->source_action = action;
             drag->action_sent = TRUE;
-            if (wl_resource_get_version (drag->source->resource) >=
-                WL_DATA_SOURCE_ACTION_SINCE_VERSION)
-                wl_data_source_send_action (drag->source->resource, action);
+            source_notify (drag->source, MB_SOURCE_ACTION, NULL, action);
         }
     }
 }
@@ -593,7 +776,7 @@ hide_icon (struct DataDrag *drag)
 static void
 end_drag (struct DataDrag *drag, Bool success)
 {
-    struct DataSource *source = drag->source;
+    struct MbDataSource *source = drag->source;
 
     if (drag->pointer_active)
     {
@@ -603,20 +786,16 @@ end_drag (struct DataDrag *drag, Bool success)
     }
     hide_icon (drag);
     clear_targets (drag);
-    if (source && source->resource)
+    if (source)
     {
         if (success)
-        {
-            if (wl_resource_get_version (source->resource) >=
-                WL_DATA_SOURCE_DND_FINISHED_SINCE_VERSION)
-                wl_data_source_send_dnd_finished (source->resource);
-        }
+            source_notify (source, MB_SOURCE_FINISHED, NULL, 0);
         else if (!source->cancelled)
         {
             source->cancelled = TRUE;
-            if (wl_resource_get_version (source->resource) >=
+            if (source_version (source) >=
                 WL_DATA_SOURCE_DND_DROP_PERFORMED_SINCE_VERSION)
-                wl_data_source_send_cancelled (source->resource);
+                source_notify (source, MB_SOURCE_CANCELLED, NULL, 0);
         }
     }
     wl_list_remove (&drag->link);
@@ -770,14 +949,11 @@ mb_data_drag_motion (uint64_t id, const MbDragPosition *position)
         struct DataDevice *device;
 
         clear_targets (drag);
-        if (drag->source && drag->source->resource)
+        if (drag->source)
         {
-            wl_data_source_send_target (drag->source->resource, NULL);
-            if (wl_resource_get_version (drag->source->resource) >=
-                WL_DATA_SOURCE_ACTION_SINCE_VERSION)
-                wl_data_source_send_action (
-                    drag->source->resource,
-                    WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
+            source_notify (drag->source, MB_SOURCE_TARGET, NULL, 0);
+            source_notify (drag->source, MB_SOURCE_ACTION, NULL,
+                           WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
             drag->source_action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
             drag->action_sent = TRUE;
         }
@@ -849,10 +1025,8 @@ mb_data_drag_drop (uint64_t id)
     }
     if (!drag)
         return;
-    if (drag->source && drag->source->resource &&
-        wl_resource_get_version (drag->source->resource) >=
-            WL_DATA_SOURCE_DND_DROP_PERFORMED_SINCE_VERSION)
-        wl_data_source_send_dnd_drop_performed (drag->source->resource);
+    if (drag->source)
+        source_notify (drag->source, MB_SOURCE_DROP, NULL, 0);
     if (!drag->source)
     {
         Bool accepted = !wl_list_empty (&drag->targets);
@@ -963,7 +1137,7 @@ start_drag (struct wl_client *client, struct wl_resource *resource,
             struct wl_resource *icon_resource, uint32_t serial)
 {
     struct DataDevice *device = wl_resource_get_user_data (resource);
-    struct DataSource *source =
+    struct MbDataSource *source =
         source_resource ? wl_resource_get_user_data (source_resource) : NULL;
     MbSurface *origin = wl_resource_get_user_data (origin_resource);
     MbSurface *icon =
@@ -1019,8 +1193,7 @@ start_drag (struct wl_client *client, struct wl_resource *resource,
     if (source)
     {
         source->use = SOURCE_DRAG;
-        if (wl_resource_get_version (source->resource) <
-            WL_DATA_SOURCE_SET_ACTIONS_SINCE_VERSION)
+        if (source_version (source) < WL_DATA_SOURCE_SET_ACTIONS_SINCE_VERSION)
             source->actions = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY;
     }
     device->seat->drag = drag;
@@ -1110,6 +1283,7 @@ get_device (struct wl_client *client, struct wl_resource *resource,
             goto fail;
         seat->id = seat_id;
         seat->focus = focus ? focus->lifetime : 0;
+        seat->selection = compositor.data->imported;
         wl_list_insert (compositor.data->seats.prev, &seat->link);
     }
     device = calloc (1, sizeof (*device));
@@ -1197,7 +1371,7 @@ mb_data_seat_removed (uint64_t id)
         if (seat->selection)
         {
             seat->selection->cancelled = TRUE;
-            wl_data_source_send_cancelled (seat->selection->resource);
+            source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
             seat->selection = NULL;
         }
         seat->focus = 0;
@@ -1235,7 +1409,7 @@ mb_data_shutdown (void)
 {
     struct MbData *data = compositor.data;
     struct DataDevice *device, *next_device;
-    struct DataSource *source, *next_source;
+    struct MbDataSource *source, *next_source;
     struct DataOffer *offer, *next_offer;
     struct DataSeat *seat, *next_seat;
     struct DataDrag *drag, *next_drag;
@@ -1258,7 +1432,7 @@ mb_data_shutdown (void)
     }
     wl_list_for_each_safe (source, next_source, &data->sources, link)
     {
-        wl_resource_destroy (source->resource);
+        mb_data_source_destroy (source);
     }
     wl_list_for_each_safe (seat, next_seat, &data->seats, link)
     {
