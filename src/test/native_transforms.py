@@ -151,7 +151,10 @@ def check_error(path, opcode, value, code, with_buffer=False):
             finally:
                 os.close(fd)
         client.send(surface, opcode, struct.pack("=i", value))
-        client.send(surface, SURFACE_COMMIT)
+        try:
+            client.send(surface, SURFACE_COMMIT)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         try:
             client.sync()
             raise AssertionError("invalid surface state was accepted")
