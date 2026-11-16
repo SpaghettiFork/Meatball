@@ -63,9 +63,26 @@ output boundaries. This includes subsurfaces, cursor images and cursor children,
 window movement, minimize/restore, and output layout changes. Binding an output
 after mapping a surface also sends its enter event. Output scale is currently 1.
 
-Present, DRI3 buffers, popups, clipboard, drag and drop, settings, and leases
-remain to be ported. `wl_data_device_manager` is the next protocol addition.
-Frame callbacks currently use a 16 ms server-loop timer. Text-input-v3 is deferred.
+`wl_data_device_manager` supports clipboard and pointer drag-and-drop transfers
+between Meatball's Wayland clients. It advertises version 4 with current Wayland
+headers and version 3 with older headers. Clipboard ownership is per seat;
+keyboard focus controls which client receives selection offers. Ownership
+changes require a serial delivered to that client on that seat. Transfers pass
+the destination's file descriptor directly to the source, including transfers
+larger than a pipe buffer. The server loop remains responsive while a reader is
+blocked. The selection clears when its source is destroyed.
+
+Drag-and-drop validates the origin's implicit button grab, follows committed
+surface-tree stacking and input regions, and negotiates copy, move, and ask
+actions. Transfers work before and after the drop. Drag icons use native
+windows with empty input shapes; their bounding shapes exclude fully
+transparent pixels. Icons support buffer offsets, transforms, viewports, and
+subsurfaces. Source cursor changes continue during the drag. Disconnects,
+device removal, and server reset cancel pending transfers.
+
+X11 clipboard selections, Xdnd interoperability, primary selection, Present,
+DRI3 buffers, popups, settings, and leases remain to be ported. Frame callbacks
+currently use a 16 ms server-loop timer. Text-input-v3 is deferred.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
@@ -127,7 +144,8 @@ The SDK must include the 32-bit native SHM stride parameter and the exported
 XACE send-access hook, `XISetEventMask`, and `RT_XKBCLIENT` on Spaghetti's
 `meatball` branch. The configuration
 check validates the SHM signature, and the
-SDK probe validates the required exports.
+SDK probe validates the required exports, including `GrabDevice` and
+`WindowHasNewCursor` for native drag grabs and cursor updates.
 
 Run the server built from that tree together with the newly built module.
 To select both when launching through `startx`:
@@ -189,6 +207,13 @@ non-desktop outputs, and multiple X screens. `native-output-surfaces` checks
 membership during movement, minimize/restore, synchronized child commits,
 cursor updates, output binding/removal, and server reset. Multi-screen checks
 use Spaghetti's Xvfb CRTC isolation fix (`85d4e8708`).
+
+`native-data` checks clipboard focus and serial validation, source replacement,
+MIME offers, large and blocked transfers, protocol versions, disconnects, and
+reset cleanup. `native-drag` checks native pointer grabs, destination movement,
+copy/move/ask negotiation, pre-drop and post-drop transfers, legacy clients,
+multiple device bindings, source-less drags, cancellation, role and action
+errors, cursor updates, shaped icons, icon reuse, disconnects, and resets.
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is
