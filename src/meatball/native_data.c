@@ -98,6 +98,7 @@ struct DataDrag
     uint64_t origin_client;
     uint32_t enter_serial, source_action;
     Bool pointer_active, dropped, action_sent, ask;
+    Bool external, native_target;
     struct DataOffer *winner;
     MbDragPosition position;
     int64_t icon_x, icon_y;
@@ -782,8 +783,11 @@ end_drag (struct DataDrag *drag, Bool success)
     {
         drag->seat->drag = NULL;
         drag->pointer_active = FALSE;
-        mb_input_end_drag (drag->seat->id);
+        if (!drag->external)
+            mb_input_end_drag (drag->seat->id);
     }
+    if (drag->native_target)
+        mb_xdnd_cancel (drag->seat->id);
     hide_icon (drag);
     clear_targets (drag);
     if (source)
@@ -936,6 +940,12 @@ mb_data_drag_motion (uint64_t id, const MbDragPosition *position)
     }
     if (!drag || !drag->pointer_active)
         return;
+    if (!drag->external)
+    {
+        drag->native_target = mb_xdnd_motion (id, drag->source, position);
+        if (drag->native_target)
+            surface = NULL;
+    }
     moved = drag->position.x != position->x || drag->position.y != position->y;
     drag->position = *position;
     if (!position_icon (drag) && drag->icon)
@@ -1027,6 +1037,21 @@ mb_data_drag_drop (uint64_t id)
         return;
     if (drag->source)
         source_notify (drag->source, MB_SOURCE_DROP, NULL, 0);
+    if (drag->native_target)
+    {
+        if (!mb_xdnd_drop (id))
+        {
+            end_drag (drag, FALSE);
+            return;
+        }
+        drag->dropped = TRUE;
+        drag->pointer_active = FALSE;
+        drag->seat->drag = NULL;
+        mb_input_end_drag (id);
+        hide_icon (drag);
+        drag->icon = NULL;
+        return;
+    }
     if (!drag->source)
     {
         Bool accepted = !wl_list_empty (&drag->targets);
@@ -1065,7 +1090,8 @@ mb_data_drag_drop (uint64_t id)
     drag->ask = winner->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
     drag->pointer_active = FALSE;
     drag->seat->drag = NULL;
-    mb_input_end_drag (id);
+    if (!drag->external)
+        mb_input_end_drag (id);
     hide_icon (drag);
     drag->icon = NULL;
     wl_list_for_each (target, &drag->targets, link)
@@ -1083,6 +1109,85 @@ mb_data_drag_drop (uint64_t id)
                 target->offer->drag = NULL;
             }
         }
+    }
+}
+
+Bool
+mb_data_drag_import (uint64_t id, MbDataSource *source)
+{
+    struct DataSeat *seat;
+    struct DataDrag *drag;
+
+    wl_list_for_each (seat, &compositor.data->seats, link)
+    {
+        if (seat->id != id || seat->removed || seat->drag)
+            continue;
+        drag = calloc (1, sizeof (*drag));
+        if (!drag)
+            return FALSE;
+        drag->source = source;
+        drag->seat = seat;
+        drag->external = TRUE;
+        drag->pointer_active = TRUE;
+        wl_list_init (&drag->targets);
+        wl_list_insert (compositor.data->drags.prev, &drag->link);
+        source->use = SOURCE_DRAG;
+        seat->drag = drag;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void
+mb_data_drag_source_actions (uint64_t id, uint32_t actions)
+{
+    struct DataDrag *drag;
+    struct DragTarget *target;
+
+    wl_list_for_each (drag, &compositor.data->drags, link)
+    {
+        if (drag->seat->id != id || !drag->external || drag->dropped ||
+            drag->source->actions == actions)
+            continue;
+        drag->source->actions = actions;
+        wl_list_for_each (target, &drag->targets, link)
+        {
+            if (!target->offer || !target->offer->active)
+                continue;
+            if (wl_resource_get_version (target->offer->resource) >=
+                WL_DATA_OFFER_SOURCE_ACTIONS_SINCE_VERSION)
+                wl_data_offer_send_source_actions (target->offer->resource,
+                                                   actions);
+            update_action (target->offer);
+        }
+    }
+}
+
+void
+mb_data_drag_native_action (uint64_t id, uint32_t action)
+{
+    struct DataDrag *drag;
+
+    wl_list_for_each (drag, &compositor.data->drags, link)
+    {
+        if (drag->seat->id == id && drag->native_target && drag->source &&
+            drag->source_action != action)
+        {
+            drag->source_action = action;
+            source_notify (drag->source, MB_SOURCE_ACTION, NULL, action);
+        }
+    }
+}
+
+void
+mb_data_drag_native_finish (uint64_t id, Bool success)
+{
+    struct DataDrag *drag, *next;
+
+    wl_list_for_each_safe (drag, next, &compositor.data->drags, link)
+    {
+        if (drag->seat->id == id && drag->native_target)
+            end_drag (drag, success);
     }
 }
 

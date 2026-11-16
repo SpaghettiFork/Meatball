@@ -922,6 +922,8 @@ bridge_output (MbClient *client, const void *message, size_t size)
     if (size != sizeof (*event) || !compositor.selections)
         return;
     type = event->u.u.type & ~SEND_EVENT_MASK;
+    if (mb_xdnd_event (NULL, event))
+        return;
     if (type == SelectionRequest)
     {
         selection_request (event);

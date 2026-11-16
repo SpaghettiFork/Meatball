@@ -160,6 +160,8 @@ surface_output (MbClient *client, const void *message, size_t size)
             WindowPtr native =
                 mb_window_get (&surface->window, DixSetAttrAccess);
 
+            if (mb_xdnd_event (surface, event))
+                return;
             mb_xdg_event (surface, event);
             if (native && !apply_input (surface, native))
             {
@@ -180,6 +182,7 @@ surface_destroyed (struct wl_resource *resource)
     struct Frame *frame, *next;
     MbSurfaceCommit *commit, *next_commit;
 
+    mb_xdnd_surface_destroyed (surface);
     mb_data_surface_destroyed (surface);
     mb_outputs_surface_destroyed (surface);
     mb_input_surface_destroyed (surface);

@@ -1330,7 +1330,8 @@ mb_xdg_map (MbSurface *surface)
                 compositor.atoms.motif_wm_hints, MB_PROPERTY_FORMAT_32,
                 PropModeReplace, ARRAY_SIZE (hints), hints, TRUE) != Success)
             return FALSE;
-        if (MapWindow (window, surface->client->native) != Success)
+        if (!mb_xdnd_advertise (surface) ||
+            MapWindow (window, surface->client->native) != Success)
             return FALSE;
         xdg->map_requested = TRUE;
     }
