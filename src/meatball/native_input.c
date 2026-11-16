@@ -285,6 +285,35 @@ set_cursor (struct wl_client *client, struct wl_resource *resource,
 }
 
 Bool
+mb_input_cursor_intersects (MbSurface *cursor, ScreenPtr screen,
+                            const pixman_box32_t *node,
+                            const pixman_box32_t *output)
+{
+    struct MbSeat *seat;
+
+    if (!compositor.input)
+        return FALSE;
+    wl_list_for_each (seat, &compositor.input->seats, link)
+    {
+        MbSurface *root;
+        double x, y;
+
+        if (seat->removed || seat->cursor_surface != cursor ||
+            !seat->pointer_focus)
+            continue;
+        root = mb_subsurface_root (seat->pointer_focus);
+        if (!root || root->window.screen != screen)
+            continue;
+        x = seat->root_pointer_x - seat->hotspot_x + screen->x;
+        y = seat->root_pointer_y - seat->hotspot_y + screen->y;
+        if (x + node->x1 < output->x2 && x + node->x2 > output->x1 &&
+            y + node->y1 < output->y2 && y + node->y2 > output->y1)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+Bool
 mb_input_cursor_visible (MbSurface *surface)
 {
     struct MbSeat *seat;

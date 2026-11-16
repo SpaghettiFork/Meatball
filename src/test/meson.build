@@ -46,6 +46,9 @@ if spaghetti_build_dir != ''
     test('native-outputs', python,
          args: ['-B', files('native_outputs.py'), test_host, sauce, output_probe],
          timeout: 60)
+    test('native-output-surfaces', python,
+         args: ['-B', files('native_output_surfaces.py'), test_host, output_probe],
+         timeout: 60)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)

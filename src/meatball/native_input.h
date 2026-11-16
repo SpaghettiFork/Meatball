@@ -20,6 +20,9 @@ extern Bool mb_input_dispatch (void);
 extern Bool mb_input_select_window (MbWindow *window, MbClient *client);
 extern Bool mb_input_observe_write (MbClient *client, const void *data,
                                     size_t size);
+extern Bool mb_input_cursor_intersects (MbSurface *cursor, ScreenPtr screen,
+                                        const pixman_box32_t *node,
+                                        const pixman_box32_t *output);
 extern Bool mb_input_cursor_visible (MbSurface *surface);
 extern Bool mb_input_cursor_changed (MbSurface *surface);
 extern void mb_input_surface_destroyed (MbSurface *surface);

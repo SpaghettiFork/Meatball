@@ -77,7 +77,7 @@ class Outputs(Wayland):
             assert struct.unpack("=i", last(events, resource, SCALE)) == (1,)
         return resource, events
 
-    def configure(self, operation, argument=0):
+    def change_outputs(self, operation, argument=0):
         self.send(self.test, 0, struct.pack("=II", operation, argument & 0xffffffff))
         return self.roundtrip_events() + self.roundtrip_events()
 
@@ -105,7 +105,7 @@ def check_changes(path):
         first_name, = client.outputs()
         first, events = client.bind_output(first_name)
         stable_name, _ = string(last(events, first, NAME))
-        events = client.configure(SPLIT)
+        events = client.change_outputs(SPLIT)
         assert struct.unpack("=Iiii", last(events, first, MODE)) == (
             MODE_CURRENT | MODE_PREFERRED, WIDTH, HEIGHT, REFRESH)
         assert not any(object_id == first and opcode == NAME for object_id, opcode, _ in events)
@@ -118,7 +118,7 @@ def check_changes(path):
                                (6, 5, 4, 7), (2, 3, 0, 1))
         for reflection, transforms in zip((0, 16, 32, 48), expected_transforms):
             for rotation, expected in zip((1, 2, 4, 8), transforms):
-                events = client.configure(ROTATION, reflection | rotation)
+                events = client.change_outputs(ROTATION, reflection | rotation)
                 if events and any(object_id == first and opcode == GEOMETRY
                                   for object_id, opcode, _ in events):
                     assert geometry(last(events, first, GEOMETRY))[-1] == expected
@@ -128,38 +128,48 @@ def check_changes(path):
         for flags, expected in ((RR_INTERLACE, REFRESH * 2),
                                 (RR_DOUBLE_SCAN, REFRESH // 2),
                                 (RR_INTERLACE | RR_DOUBLE_SCAN, REFRESH), (0, REFRESH)):
-            events = client.configure(MODE_FLAGS, flags)
+            events = client.change_outputs(MODE_FLAGS, flags)
             modes = [data for object_id, opcode, data in events if object_id == first and opcode == MODE]
             if modes:
                 assert struct.unpack("=Iiii", modes[-1])[-1] == expected
             else:
                 assert flags == 0 and expected == REFRESH
-        events = client.configure(POSITION, -WIDTH)
+        events = client.change_outputs(POSITION, -WIDTH)
         assert geometry(last(events, first, GEOMETRY))[:2] == (-WIDTH, 0)
-        events = client.configure(PHYSICAL)
+        events = client.change_outputs(PHYSICAL)
         assert geometry(last(events, first, GEOMETRY))[2:5] == (320, 180, 2)
-        events = client.configure(CONNECTION, 0)
+        events = client.change_outputs(CONNECTION, 0)
         assert any(opcode == GLOBAL_REMOVE and struct.unpack("=I", data) == (first_name,)
                    for object_id, opcode, data in events if object_id != client.test)
         assert client.outputs() == [second_name]
+        # A client can bind a global announced before its removal reached it.
+        retired = client.allocate_id()
+        encoded = b"wl_output\0"
+        padded = encoded + bytes(-len(encoded) % 4)
+        client.send(client.registry_id, 0,
+                    struct.pack("=II", first_name, len(encoded)) + padded
+                    + struct.pack("=II", 4, retired))
+        events = client.roundtrip_events()
+        assert struct.unpack("=Iiii", last(events, retired, MODE))[1:3] == (WIDTH, HEIGHT)
+        client.send(retired, OUTPUT_RELEASE)
         # A removed binding stays valid until the client releases it.
         client.send(first, OUTPUT_RELEASE)
         client.sync()
-        client.configure(CONNECTION, 1)
+        client.change_outputs(CONNECTION, 1)
         replacement_name, = set(client.outputs()) - {second_name}
         assert replacement_name != first_name
         first, events = client.bind_output(replacement_name)
         assert string(last(events, first, NAME))[0] == stable_name
-        client.configure(NON_DESKTOP, 1)
+        client.change_outputs(NON_DESKTOP, 1)
         assert client.outputs() == [second_name]
-        client.configure(NON_DESKTOP, 0)
+        client.change_outputs(NON_DESKTOP, 0)
         assert len(client.outputs()) == 2
-        client.configure(DESTROY_SECOND)
+        client.change_outputs(DESTROY_SECOND)
         assert len(client.outputs()) == 1
-        client.configure(OFF)
+        client.change_outputs(OFF)
         assert client.outputs() == []
         # Existing RandR outputs with no active CRTCs produce no fallback output.
-        client.configure(SPLIT)
+        client.change_outputs(SPLIT)
         assert len(client.outputs()) == 2
         client.send(second, OUTPUT_RELEASE)
         client.sync()
