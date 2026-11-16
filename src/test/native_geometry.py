@@ -178,17 +178,29 @@ def check_cropped_input(path, display):
         changed = (GEOMETRY[0] + 1, GEOMETRY[1] + 1, *GEOMETRY[2:])
         client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *changed))
         input_region(client, changed)
+        client.sync()
+        # A WM state event must keep using the geometry already committed.
+        state = intern_atom(x11, "_NET_WM_STATE")
+        focused = intern_atom(x11, "_NET_WM_STATE_FOCUSED")
+        x11.sendall(struct.pack("<BBHIIIB3xII", CHANGE_PROPERTY, PROPERTY_REPLACE,
+                                7, window, state, XA_ATOM, PROPERTY_FORMAT, 1, focused))
+        client.configure()
+        client.sync()
+        actor.fake(MOTION, x=WINDOW_ORIGIN + 2, y=WINDOW_ORIGIN + 2)
+        data, _ = client.until(client.pointer, POINTER_MOTION)
+        assert struct.unpack_from("=ii", data, 4) == ((GEOMETRY[0] + 2) * FIXED_ONE,
+                                                     (GEOMETRY[1] + 2) * FIXED_ONE)
         client.commit()
         client.sync()
         x11.sendall(struct.pack("<BBHI", GET_GEOMETRY, 0, 2, window))
         reply = receive_exact(x11, X11_REPLY_SIZE)
         assert reply[0] == 1
         assert struct.unpack_from("<hhHH", reply, 12) == (WINDOW_ORIGIN, WINDOW_ORIGIN, *GEOMETRY[2:])
-        actor.fake(MOTION, x=WINDOW_ORIGIN + 2, y=WINDOW_ORIGIN + 2)
+        actor.fake(MOTION, x=WINDOW_ORIGIN + 3, y=WINDOW_ORIGIN + 3)
         while True:
             data, _ = client.until(client.pointer, POINTER_MOTION)
-            if struct.unpack_from("=ii", data, 4) == ((changed[0] + 2) * FIXED_ONE,
-                                                     (changed[1] + 2) * FIXED_ONE):
+            if struct.unpack_from("=ii", data, 4) == ((changed[0] + 3) * FIXED_ONE,
+                                                     (changed[1] + 3) * FIXED_ONE):
                 break
     finally:
         client.close()

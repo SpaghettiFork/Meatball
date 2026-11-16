@@ -42,6 +42,14 @@ typedef struct
     XID pixels;
 } MbSurfaceContent;
 
+typedef struct
+{
+    struct MbXdgSurface *owner;
+    Bool geometry_set;
+    int32_t x, y, width, height;
+    uint32_t serial;
+} MbXdgCommitState;
+
 typedef struct MbSurfaceCommit
 {
     struct wl_list link;
@@ -49,6 +57,7 @@ typedef struct MbSurfaceCommit
     struct MbSurfaceCommit *parent, *resume;
     MbSurface *surface;
     MbSurfaceContent *content;
+    MbXdgCommitState xdg;
     struct wl_list frames;
     pixman_region32_t input;
     Bool input_default;

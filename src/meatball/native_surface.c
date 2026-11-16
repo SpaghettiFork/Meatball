@@ -57,6 +57,7 @@ mb_surface_commit_free (MbSurfaceCommit *commit)
     }
     content_unref (commit->surface, commit->content);
     mb_subsurface_commit_free (commit);
+    mb_xdg_commit_free (commit);
     pixman_region32_fini (&commit->input);
     if (!wl_list_empty (&commit->link))
         commit->surface->commit_count--;
@@ -488,6 +489,7 @@ capture_commit (MbSurface *surface)
     wl_list_init (&commit->dependencies);
     wl_list_init (&commit->frames);
     pixman_region32_init (&commit->input);
+    mb_xdg_capture (commit);
     if (surface->input_changed)
         input = &surface->pending_input;
     if (!pixman_region32_copy (&commit->input, input))
@@ -558,6 +560,7 @@ mb_surface_commit_apply (MbSurfaceCommit *commit)
     MbSurface *surface = commit->surface;
 
     mb_subsurface_apply (commit);
+    mb_xdg_apply (commit);
     content_unref (surface, surface->content);
     surface->content = commit->content;
     commit->content = NULL;
