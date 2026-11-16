@@ -82,6 +82,8 @@ struct MbXdgSurface
     unsigned int configure_count;
     Bool initialized, configured, map_requested;
     int32_t last_width, last_height;
+    uint32_t last_serial, acked_serial, committed_serial;
+    MbXdgCommitState pending;
     int32_t min_width, min_height, max_width, max_height;
     Bool hints_changed;
     Bool geometry_set, frame_extents_set, anchor_set;
@@ -317,6 +319,8 @@ reset_mapping (struct MbXdgSurface *xdg)
     xdg->initialized = xdg->configured = xdg->map_requested = FALSE;
     xdg->geometry_set = xdg->frame_extents_set = xdg->anchor_set = FALSE;
     xdg->parent = None;
+    xdg->pending = (MbXdgCommitState){ 0 };
+    xdg->last_serial = xdg->acked_serial = xdg->committed_serial = 0;
     memset (xdg->frame_extents, 0, sizeof (xdg->frame_extents));
     if (xdg->surface)
     {
@@ -818,11 +822,11 @@ set_geometry (struct wl_client *client, struct wl_resource *resource,
                                 "invalid window geometry");
         return;
     }
-    xdg->geometry_set = TRUE;
-    xdg->geometry_x = x;
-    xdg->geometry_y = y;
-    xdg->geometry_width = width;
-    xdg->geometry_height = height;
+    xdg->pending.geometry_set = TRUE;
+    xdg->pending.x = x;
+    xdg->pending.y = y;
+    xdg->pending.width = width;
+    xdg->pending.height = height;
 }
 
 static void
@@ -863,6 +867,7 @@ ack_configure (struct wl_client *client, struct wl_resource *resource,
             break;
     }
     xdg->configured = TRUE;
+    xdg->acked_serial = serial;
 }
 
 static const struct xdg_surface_interface xdg_implementation = {
@@ -1038,6 +1043,7 @@ send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
     array.size = count * sizeof (*states);
     array.data = states;
     configure->serial = wl_display_next_serial (compositor.wl_display);
+    xdg->last_serial = configure->serial;
     wl_list_insert (xdg->configures.prev, &configure->link);
     xdg->configure_count++;
     xdg->last_width = width;
@@ -1085,6 +1091,41 @@ mb_xdg_commit (MbSurface *surface)
         xdg->initialized = TRUE;
     }
     return TRUE;
+}
+
+void
+mb_xdg_capture (MbSurfaceCommit *commit)
+{
+    struct MbXdgSurface *xdg = commit->surface->xdg;
+
+    if (!xdg)
+        return;
+    commit->xdg = xdg->pending;
+    commit->xdg.owner = xdg;
+    commit->xdg.serial = xdg->acked_serial;
+    xdg->refs++;
+}
+
+void
+mb_xdg_apply (MbSurfaceCommit *commit)
+{
+    struct MbXdgSurface *xdg = commit->xdg.owner;
+
+    if (!xdg || !xdg->toplevel || commit->surface->xdg != xdg)
+        return;
+    xdg->geometry_set = commit->xdg.geometry_set;
+    xdg->geometry_x = commit->xdg.x;
+    xdg->geometry_y = commit->xdg.y;
+    xdg->geometry_width = commit->xdg.width;
+    xdg->geometry_height = commit->xdg.height;
+    xdg->committed_serial = commit->xdg.serial;
+}
+
+void
+mb_xdg_commit_free (MbSurfaceCommit *commit)
+{
+    if (commit->xdg.owner)
+        xdg_unref (commit->xdg.owner);
 }
 
 Bool
