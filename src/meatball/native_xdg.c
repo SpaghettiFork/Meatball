@@ -132,13 +132,12 @@ apply_bounds (MbSurface *surface, WindowPtr window)
 
                 if (node == surface)
                     continue;
-                if (x < 0 || y < 0 || x + node->width > surface->scene_width ||
-                    y + node->height > surface->scene_height)
-                {
-                    RegionDestroy (bounds);
-                    return FALSE;
-                }
-                box = (BoxRec){ x, y, x + node->width, y + node->height };
+                box =
+                    (BoxRec){ max (0, x), max (0, y),
+                              min (surface->scene_width, x + node->width),
+                              min (surface->scene_height, y + node->height) };
+                if (box.x1 >= box.x2 || box.y1 >= box.y2)
+                    continue;
                 RegionInit (&child, &box, 0);
                 success = RegionUnion (bounds, bounds, &child);
                 RegionUninit (&child);
@@ -1088,6 +1087,55 @@ mb_xdg_commit (MbSurface *surface)
 }
 
 Bool
+mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds)
+{
+    struct MbXdgSurface *xdg = surface->xdg;
+    WindowPtr window;
+    PropertyPtr property;
+    Bool horizontal = FALSE, vertical = FALSE, fullscreen = FALSE;
+    const CARD32 *atoms;
+    unsigned int i;
+    pixman_box32_t geometry;
+    int result;
+
+    if (!xdg || !xdg->geometry_set)
+        return TRUE;
+    window = mb_window_get (&surface->window, DixGetPropAccess);
+    if (!window)
+        return TRUE;
+    result =
+        dixLookupProperty (&property, window, compositor.atoms.net_wm_state,
+                           surface->client->native, DixReadAccess);
+    if (result == BadAlloc)
+        return FALSE;
+    if (result != Success || property->type != XA_ATOM ||
+        property->format != MB_PROPERTY_FORMAT_32)
+        return TRUE;
+    atoms = property->data;
+    for (i = 0; i < property->size; i++)
+    {
+        horizontal |= atoms[i] == compositor.atoms.net_wm_maximized_horz;
+        vertical |= atoms[i] == compositor.atoms.net_wm_maximized_vert;
+        fullscreen |= atoms[i] == compositor.atoms.net_wm_fullscreen;
+    }
+    if (!fullscreen && !(horizontal && vertical))
+        return TRUE;
+    geometry = (pixman_box32_t){
+        max (bounds->x1, min (bounds->x2, xdg->geometry_x)),
+        max (bounds->y1, min (bounds->y2, xdg->geometry_y)),
+        min ((int64_t)bounds->x2,
+             max ((int64_t)bounds->x1,
+                  (int64_t)xdg->geometry_x + xdg->geometry_width)),
+        min ((int64_t)bounds->y2,
+             max ((int64_t)bounds->y1,
+                  (int64_t)xdg->geometry_y + xdg->geometry_height)),
+    };
+    if (geometry.x1 < geometry.x2 && geometry.y1 < geometry.y2)
+        *bounds = geometry;
+    return TRUE;
+}
+
+Bool
 mb_xdg_map (MbSurface *surface)
 {
     struct MbXdgSurface *xdg = surface->xdg;
@@ -1245,6 +1293,10 @@ mb_xdg_event (MbSurface *surface, const xEvent *event)
     }
     window = mb_window_get (&surface->window, DixGetAttrAccess);
     if (!window || !xdg->initialized)
+        return;
+    if (type == PropertyNotify &&
+        event->u.property.atom == compositor.atoms.net_wm_state &&
+        !mb_surface_update (surface))
         return;
     int32_t width = max (0, (int64_t)window->drawable.width -
                                 xdg->frame_extents[0] - xdg->frame_extents[1]);

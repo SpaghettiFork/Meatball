@@ -608,6 +608,14 @@ mb_surface_update (MbSurface *surface)
                                 "surface tree exceeds native canvas limits");
         return FALSE;
     }
+    pixman_box32_t bounds = { x1, y1, x2, y2 };
+
+    if (!mb_xdg_constrain_scene (surface, &bounds))
+        goto fail;
+    x1 = bounds.x1;
+    y1 = bounds.y1;
+    x2 = bounds.x2;
+    y2 = bounds.y2;
     offset = surface->offset_x || surface->offset_y ||
              surface->scene_x != x1 || surface->scene_y != y1;
     if (!surface->pixels)
