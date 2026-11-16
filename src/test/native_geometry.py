@@ -18,7 +18,7 @@ from native_transforms import dimensions, wait_image
 from native_shadows import manager_window, set_compositor
 from native_xdg import (XDG_GEOMETRY, TOP_MIN_SIZE, TOP_MAX_SIZE,
                         CHANGE_ATTRIBUTES, CW_EVENT_MASK, CHANGE_PROPERTY,
-                        SEND_EVENT_FLAG)
+                        SEND_EVENT_FLAG, XDG_ACK_CONFIGURE, configure_window)
 
 QUERY_EXTENSION = 98
 SHAPE_SELECT_INPUT = 6
@@ -46,6 +46,12 @@ PROPERTY_FORMAT = 32
 PROPERTY_REPLACE = 0
 GET_GEOMETRY = 14
 FIXED_ONE = 256
+RESTORE_WIDTH = 60
+STALE_HEIGHT = 50
+RESTORE_HEIGHT = 40
+CLIENT_WIDTH = 70
+CLIENT_HEIGHT = 45
+SHADOW_PADDING = SURFACE_SIZE - GEOMETRY[2]
 
 
 class Watcher:
@@ -207,6 +213,79 @@ def check_cropped_input(path, display):
         x11.close()
 
 
+def check_stale_configures(path, display):
+    x11, setup = connect_x11(display, return_setup=True)
+    root = root_window(setup)
+    before = query_tree(x11, root)
+    client = InputClient(path)
+    try:
+        window, = query_tree(x11, root) - before
+        client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *GEOMETRY))
+        map_window(client, x11, root, window=window)
+        configure_window(x11, window, RESTORE_WIDTH, STALE_HEIGHT)
+        older, size, _ = client.configure(acknowledge=False)
+        assert size == (RESTORE_WIDTH, STALE_HEIGHT), size
+        configure_window(x11, window, RESTORE_WIDTH, RESTORE_HEIGHT)
+        latest, size, _ = client.configure(acknowledge=False)
+        assert size == (RESTORE_WIDTH, RESTORE_HEIGHT), size
+        client.send(client.xdg, XDG_ACK_CONFIGURE, struct.pack("=I", older))
+        client.send(client.xdg, XDG_GEOMETRY,
+                    struct.pack("=iiii", 0, 0, RESTORE_WIDTH, STALE_HEIGHT))
+        events = publish(client, client.surface, solid(BLUE, RESTORE_WIDTH, STALE_HEIGHT))
+        assert dimensions(x11, window) == (RESTORE_WIDTH, RESTORE_HEIGHT)
+        assert not any(obj == client.top and opcode == 0 for obj, opcode, _ in events), events
+        client.send(client.xdg, XDG_ACK_CONFIGURE, struct.pack("=I", latest))
+        client.send(client.xdg, XDG_GEOMETRY,
+                    struct.pack("=iiii", GEOMETRY[0], GEOMETRY[1], RESTORE_WIDTH, RESTORE_HEIGHT))
+        publish(client, client.surface,
+                solid(RED, RESTORE_WIDTH + SHADOW_PADDING, RESTORE_HEIGHT + SHADOW_PADDING))
+        assert dimensions(x11, window) == (RESTORE_WIDTH, RESTORE_HEIGHT)
+        # A client may choose a new size once its latest configure is committed.
+        client.send(client.xdg, XDG_GEOMETRY,
+                    struct.pack("=iiii", GEOMETRY[0], GEOMETRY[1], CLIENT_WIDTH, CLIENT_HEIGHT))
+        events = publish(client, client.surface,
+                         solid(BLUE, CLIENT_WIDTH + SHADOW_PADDING, CLIENT_HEIGHT + SHADOW_PADDING))
+        assert dimensions(x11, window) == (CLIENT_WIDTH, CLIENT_HEIGHT)
+        assert not any(obj == client.top and opcode == 0 for obj, opcode, _ in events), events
+    finally:
+        client.close()
+        x11.close()
+
+
+def check_pending_compositor_layout(path, display):
+    x11, setup = connect_x11(display, return_setup=True)
+    root = root_window(setup)
+    before = query_tree(x11, root)
+    client = InputClient(path)
+    try:
+        window, = query_tree(x11, root) - before
+        actor = XInput(x11, root)
+        client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *GEOMETRY))
+        map_window(client, x11, root, window=window)
+        configure_window(x11, window, RESTORE_WIDTH, RESTORE_HEIGHT)
+        serial, size, _ = client.configure(acknowledge=False)
+        assert size == (RESTORE_WIDTH, RESTORE_HEIGHT), size
+        owner = manager_window(x11, setup, root)
+        set_compositor(x11, owner, intern_atom(x11, "_NET_WM_CM_S0"))
+        actor.sync()
+        client.sync()
+        assert dimensions(x11, window) == (RESTORE_WIDTH, RESTORE_HEIGHT)
+        client.send(client.xdg, XDG_ACK_CONFIGURE, struct.pack("=I", serial))
+        client.send(client.xdg, XDG_GEOMETRY,
+                    struct.pack("=iiii", GEOMETRY[0], GEOMETRY[1], RESTORE_WIDTH, RESTORE_HEIGHT))
+        publish(client, client.surface,
+                solid(RED, RESTORE_WIDTH + SHADOW_PADDING, RESTORE_HEIGHT + SHADOW_PADDING))
+        x11.sendall(struct.pack("<BBHI", GET_GEOMETRY, 0, 2, window))
+        reply = receive_exact(x11, X11_REPLY_SIZE)
+        assert reply[0] == 1
+        assert struct.unpack_from("<hhHH", reply, 12) == (
+            WINDOW_ORIGIN - GEOMETRY[0], WINDOW_ORIGIN - GEOMETRY[1],
+            RESTORE_WIDTH + SHADOW_PADDING, RESTORE_HEIGHT + SHADOW_PADDING)
+    finally:
+        client.close()
+        x11.close()
+
+
 def check_maximized_subsurfaces(path, display, fullscreen=False):
     x11, setup = connect_x11(display, return_setup=True)
     root = root_window(setup)
@@ -265,6 +344,8 @@ def main():
             wait_socket(path, process)
             check_repaints(path, display)
             check_cropped_input(path, display)
+            check_stale_configures(path, display)
+            check_pending_compositor_layout(path, display)
             check_maximized_subsurfaces(path, display)
             check_maximized_subsurfaces(path, display, fullscreen=True)
             assert process.poll() is None

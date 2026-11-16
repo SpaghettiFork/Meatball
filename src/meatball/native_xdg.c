@@ -80,7 +80,7 @@ struct MbXdgSurface
     unsigned int refs;
     struct wl_list configures;
     unsigned int configure_count;
-    Bool initialized, configured, map_requested;
+    Bool initialized, configured, map_requested, updating_state;
     int32_t last_width, last_height;
     uint32_t last_serial, acked_serial, committed_serial;
     MbXdgCommitState pending;
@@ -1129,6 +1129,17 @@ mb_xdg_commit_free (MbSurfaceCommit *commit)
 }
 
 Bool
+mb_xdg_resize_pending (MbSurface *surface)
+{
+    struct MbXdgSurface *xdg = surface->xdg;
+
+    return xdg && (xdg->updating_state ||
+                   (xdg->map_requested && xdg->last_width > 0 &&
+                    xdg->last_height > 0 &&
+                    xdg->last_serial != xdg->committed_serial));
+}
+
+Bool
 mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
                         int32_t *anchor_x, int32_t *anchor_y)
 {
@@ -1375,16 +1386,31 @@ mb_xdg_event (MbSurface *surface, const xEvent *event)
     if (!window || !xdg->initialized)
         return;
     if (type == PropertyNotify &&
-        event->u.property.atom == compositor.atoms.net_wm_state &&
-        !mb_surface_update (surface))
-        return;
+        event->u.property.atom == compositor.atoms.net_wm_state)
+    {
+        Bool updated;
+
+        xdg->updating_state = TRUE;
+        updated = mb_surface_update (surface);
+        xdg->updating_state = FALSE;
+        if (!updated)
+            return;
+    }
     int32_t width = max (0, (int64_t)window->drawable.width -
                                 xdg->frame_extents[0] - xdg->frame_extents[1]);
     int32_t height =
         max (0, (int64_t)window->drawable.height - xdg->frame_extents[2] -
                     xdg->frame_extents[3]);
 
+    int32_t content_width =
+        max (0, (int64_t)surface->scene_width - xdg->frame_extents[0] -
+                    xdg->frame_extents[1]);
+    int32_t content_height =
+        max (0, (int64_t)surface->scene_height - xdg->frame_extents[2] -
+                    xdg->frame_extents[3]);
+
     if ((type == ConfigureNotify &&
+         (width != content_width || height != content_height) &&
          (xdg->last_width != width || xdg->last_height != height)) ||
         (type == PropertyNotify && xdg->map_requested &&
          event->u.property.atom == compositor.atoms.net_wm_state))
