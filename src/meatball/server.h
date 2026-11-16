@@ -19,6 +19,7 @@
 #include "native_viewport.h"
 #include "native_window.h"
 #include "native_xdg.h"
+#include "native_xdnd.h"
 #include <dixstruct.h>
 #include <resource.h>
 #include <wayland-server-core.h>
@@ -41,6 +42,7 @@ typedef struct
     struct MbOutputs *outputs;
     struct MbData *data;
     struct MbSelections *selections;
+    struct MbXdnd *xdnd;
     struct wl_listener client_created;
     MbClient *bridge_client;
     int clients_fd;

@@ -28,6 +28,7 @@ native_client.c/.h        per-connection native resources and FD transfer
 native_cursor.c/.h        client cursor surfaces as native cursors
 native_data.c/.h          clipboard and drag-and-drop transfers
 native_selection.c/.h     asynchronous X11 selection conversions
+native_xdnd.c/.h          X11 drag-and-drop negotiation
 native_input.c/.h         pointer and keyboard routing, grabs
 native_keymap.c/.h        sealed keymap descriptors
 native_output.c/.h        wl_output globals and surface membership
@@ -261,9 +262,22 @@ owner disconnects, and resets clean up pending conversions. Selection ownership
 and transfer windows are unmapped InputOnly windows. X11 `MULTIPLE` conversions
 and legacy `STRING` export are not implemented yet.
 
+Xdnd versions 3 through 5 bridge pointer drags in both directions. Mapped xdg
+toplevels advertise `XdndAware`. Outgoing drags discover aware ancestors and
+validated proxy windows, publish type and action lists, and coalesce pointer
+motion while awaiting status. Drop waits for the latest status reply; selection
+ownership remains available until completion. Copy, move, and ask actions map
+to Wayland drag actions, including the final action after an ask drop. Incoming
+drags use the X11 source's client pointer to choose a seat, retain its pointer
+grab, and use committed surface-tree hit testing. X11 source actions and target
+acceptance update status replies. Owner or target destruction, selection loss, failed transfers, and server reset clean
+up drag state. Status replies time out after 10 seconds and drop completion
+after 30 seconds. Because `XdndSelection` is global, one X11 bridge drag can be
+active at a time; another Wayland drag cannot replace a pending X11 drop.
+Xdnd versions 1 and 2 are not implemented.
+
 ## Still to port
 
-- Xdnd interoperability.
 - Primary selection.
 - Present.
 - DRI3 buffers.
@@ -334,8 +348,13 @@ Every check runs against the isolated module test host.
   disconnects, and reset cleanup.
 - `native-selections` checks X11 clipboard ownership, text and binary MIME
   negotiation, timestamps, unsupported targets, small and large transfers in
-  both directions, INCR backpressure, blocked readers, Latin-1 imports,
-  ownership replacement, owner disconnects, and resets.
+  both directions, INCR backpressure, omitted size hints, large property chunks,
+  blocked readers, Latin-1 imports, ownership replacement, owner disconnects, and resets.
+- `native-xdnd` checks both drag directions for versions 3 through 5, type
+  lists, validated proxies, copy/move/ask actions, final ask actions, selection
+  transfers before and after drop, coalesced motion, drops awaiting status,
+  overlapping drags, clipboard isolation, rejected drops, destroyed targets,
+  disconnected sources, selection loss, retained X11 pointer grabs, and resets.
 - `native-drag` checks native pointer grabs, destination movement,
   copy/move/ask negotiation, pre-drop and post-drop transfers, legacy clients,
   multiple device bindings, source-less drags, cancellation, role and action
@@ -372,7 +391,9 @@ and `XdndSelection`. Imported sources retain a MIME-to-atom mapping and a
 conversion timestamp; their provider notifications can drive drag negotiation.
 Foreign window watches remain selected while either a drag or an active
 transfer refers to that window. Releasing one selection does not clear another
-client's newer ownership. The matching Spaghetti SDK already provides the
+client's newer ownership. INCR imports accept omitted advisory sizes, including
+those used by xclip. A manual xclip smoke check covers small and roughly 1.5 MB
+transfers in both directions. The matching Spaghetti SDK already provides the
 selection and property APIs used by this bridge; no server ABI change is needed.
 `mb_data_import_selection` publishes a foreign selection to active seats and
 newly created data devices. These are private module interfaces; configuration

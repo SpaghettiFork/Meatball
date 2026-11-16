@@ -20,6 +20,8 @@ typedef enum
 typedef struct
 {
     void (*receive) (void *data, const char *mime, int fd);
+    /* Defer source destruction until notification returns. DESTROYED may
+     * release the provider state. */
     void (*notify) (void *data, MbSourceEvent event, const char *mime,
                     uint32_t action);
 } MbDataSourceOps;
@@ -48,11 +50,16 @@ typedef struct
 {
     MbSurface *surface;
     ScreenPtr screen;
+    Window native;
     wl_fixed_t x, y;
     int32_t root_x, root_y;
     uint32_t time;
 } MbDragPosition;
 
+extern Bool mb_data_drag_import (uint64_t seat, MbDataSource *source);
+extern void mb_data_drag_source_actions (uint64_t seat, uint32_t actions);
+extern void mb_data_drag_native_action (uint64_t seat, uint32_t action);
+extern void mb_data_drag_native_finish (uint64_t seat, Bool success);
 extern void mb_data_drag_motion (uint64_t seat,
                                  const MbDragPosition *position);
 extern void mb_data_drag_drop (uint64_t seat);

@@ -30,6 +30,7 @@ srcs_meatball = [
     'native_input.c',
     'native_data.c',
     'native_selection.c',
+    'native_xdnd.c',
     'native_output.c',
     'native_cursor.c',
     'native_window.c',

@@ -34,6 +34,7 @@ loop_block (void *data, void *timeout)
     wl_event_loop_dispatch_idle (compositor.wl_event_loop);
     if (mb_input_dispatch ())
         AdjustWaitForDelay (timeout, 0);
+    mb_xdnd_dispatch ();
     mb_outputs_refresh ();
     wl_display_flush_clients (compositor.wl_display);
 }

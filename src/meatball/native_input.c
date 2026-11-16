@@ -110,7 +110,7 @@ struct InputEvent
     enum InputKind kind;
     uint64_t client, seat;
     uint64_t target_client;
-    XID target_window;
+    XID target_window, native_window;
     int target_screen;
     Bool drag_event;
     size_t size, charge;
@@ -970,6 +970,9 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
         {
             MbSurface *root = root_for_window (GetSpriteWindow (pointer));
 
+            WindowPtr native = GetSpriteWindow (pointer);
+
+            event->native_window = native ? native->drawable.id : None;
             event->drag_event = TRUE;
             event->target_client = root ? root->client->lifetime : 0;
             event->target_window = root ? root->window.id : None;
@@ -1199,6 +1202,30 @@ drag_position (MbSurface *root, ScreenPtr screen, double x, double y,
     return position;
 }
 
+uint64_t
+mb_input_drag_seat (ClientPtr client)
+{
+    struct MbSeat *seat;
+    DeviceIntPtr pointer = PickPointer (client);
+
+    wl_list_for_each (seat, &compositor.input->seats, link)
+    {
+        if (!seat->removed && pointer && seat->pointer_id == pointer->id)
+            return seat->lifetime;
+    }
+    return 0;
+}
+
+MbDragPosition
+mb_input_drag_position (MbSurface *root, int32_t x, int32_t y, uint32_t time)
+{
+    MbDragPosition position =
+        drag_position (root, root->window.screen, x, y, time);
+
+    position.native = root->window.id;
+    return position;
+}
+
 Bool
 mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
                      MbDragPosition *position)
@@ -1251,6 +1278,9 @@ mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
     root = root_for_window (GetSpriteWindow (pointer));
     *position = drag_position (root, seat->drag_screen, seat->root_pointer_x,
                                seat->root_pointer_y, GetTimeInMillis ());
+    WindowPtr native = GetSpriteWindow (pointer);
+
+    position->native = native ? native->drawable.id : None;
     return TRUE;
 }
 
@@ -1505,6 +1535,7 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
             position =
                 drag_position (root, seat->drag_screen, seat->root_pointer_x,
                                seat->root_pointer_y, event->time);
+            position.native = queued->native_window;
             mb_data_drag_motion (seat->lifetime, &position);
             if (!seat->drag_owner || event->evtype == XI_Motion || !detail ||
                 detail >= KEYCODE_COUNT ||
@@ -1654,6 +1685,9 @@ mb_input_dispatch (void)
                 position = drag_position (
                     root, seat->drag_screen, seat->root_pointer_x,
                     seat->root_pointer_y, GetTimeInMillis ());
+                WindowPtr native = GetSpriteWindow (pointer);
+
+                position.native = native ? native->drawable.id : None;
                 mb_data_drag_motion (seat->lifetime, &position);
             }
             root = NULL;
