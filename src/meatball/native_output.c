@@ -42,9 +42,16 @@ struct Output
 
 struct OutputResource
 {
-    struct wl_list link;
+    struct wl_list link, surfaces;
     struct wl_resource *resource;
     struct Output *output;
+};
+
+struct SurfaceOutput
+{
+    struct wl_list link;
+    MbSurface *surface;
+    Bool seen;
 };
 
 struct MbOutputs
@@ -52,20 +59,39 @@ struct MbOutputs
     struct wl_list outputs;
 };
 
+static void refresh_surfaces (void);
+
 static void
 release (struct wl_client *client, struct wl_resource *resource)
 {
     wl_resource_destroy (resource);
 }
 
-static const struct wl_output_interface implementation = { .release =
-                                                               release };
+static const struct wl_output_interface implementation = {
+    .release = release,
+};
+
+static void
+clear_memberships (struct OutputResource *binding, Bool notify)
+{
+    struct SurfaceOutput *membership, *next;
+
+    wl_list_for_each_safe (membership, next, &binding->surfaces, link)
+    {
+        if (notify && !membership->surface->client->failed)
+            wl_surface_send_leave (membership->surface->resource,
+                                   binding->resource);
+        wl_list_remove (&membership->link);
+        free (membership);
+    }
+}
 
 static void
 resource_destroyed (struct wl_resource *resource)
 {
     struct OutputResource *binding = wl_resource_get_user_data (resource);
 
+    clear_memberships (binding, FALSE);
     wl_list_remove (&binding->link);
     free (binding);
 }
@@ -86,10 +112,10 @@ send_state (struct OutputResource *binding, Bool initial)
                          state->mode_height, state->refresh);
     if (initial && version >= WL_OUTPUT_SCALE_SINCE_VERSION)
         wl_output_send_scale (resource, OUTPUT_SCALE);
-    if (version >= WL_OUTPUT_NAME_SINCE_VERSION)
+    if (initial && version >= WL_OUTPUT_NAME_SINCE_VERSION)
+        wl_output_send_name (resource, output->name);
+    if (version >= WL_OUTPUT_DESCRIPTION_SINCE_VERSION)
     {
-        if (initial)
-            wl_output_send_name (resource, output->name);
         snprintf (description, sizeof (description), OUTPUT_DESCRIPTION_FORMAT,
                   output->screen->myNum, state->model);
         wl_output_send_description (resource, description);
@@ -119,10 +145,12 @@ bind_output (struct wl_client *client, void *data, uint32_t version,
         return;
     }
     binding->output = output;
+    wl_list_init (&binding->surfaces);
     wl_list_insert (output->resources.prev, &binding->link);
     wl_resource_set_implementation (binding->resource, &implementation,
                                     binding, resource_destroyed);
     send_state (binding, TRUE);
+    refresh_surfaces ();
 }
 
 static int32_t
@@ -271,6 +299,149 @@ update_output (ScreenPtr screen, RROutputPtr native)
     return TRUE;
 }
 
+static Bool
+surface_enter (MbSurface *surface, struct OutputResource *binding)
+{
+    struct SurfaceOutput *membership;
+
+    wl_list_for_each (membership, &binding->surfaces, link)
+    {
+        if (membership->surface == surface)
+        {
+            membership->seen = TRUE;
+            return TRUE;
+        }
+    }
+    membership = calloc (1, sizeof (*membership));
+    if (!membership)
+        return FALSE;
+    membership->surface = surface;
+    membership->seen = TRUE;
+    wl_list_insert (binding->surfaces.prev, &membership->link);
+    wl_surface_send_enter (surface->resource, binding->resource);
+    return TRUE;
+}
+
+static void
+refresh_surfaces (void)
+{
+    struct Output *output;
+    struct OutputResource *binding;
+    struct SurfaceOutput *membership, *next;
+    MbSurface *root;
+
+    wl_list_for_each (output, &compositor.outputs->outputs, link)
+    {
+        wl_list_for_each (binding, &output->resources, link)
+        {
+            wl_list_for_each (membership, &binding->surfaces, link)
+            {
+                membership->seen = FALSE;
+            }
+        }
+    }
+    wl_list_for_each (root, &compositor.surfaces, link)
+    {
+        MbSceneIterator iterator = { .root = root, .surface = root };
+        MbSurface *surface;
+        WindowPtr window;
+        Bool cursor = root->role == MB_ROLE_CURSOR;
+
+        if (!root->pixels || root->client->failed ||
+            mb_subsurface_root (root) != root)
+            continue;
+        window = mb_window_get (&root->window, DixGetAttrAccess);
+        if (!window ||
+            (cursor ? !mb_input_cursor_visible (root) : !window->realized))
+            continue;
+        while ((surface = mb_scene_next (&iterator)))
+        {
+            pixman_box32_t node = { iterator.x, iterator.y,
+                                    iterator.x + surface->width,
+                                    iterator.y + surface->height };
+
+            if (!cursor)
+            {
+                int32_t x = window->drawable.x + root->window.screen->x -
+                            root->scene_x;
+                int32_t y = window->drawable.y + root->window.screen->y -
+                            root->scene_y;
+
+                node.x1 += x;
+                node.x2 += x;
+                node.y1 += y;
+                node.y2 += y;
+            }
+            wl_list_for_each (output, &compositor.outputs->outputs, link)
+            {
+                struct OutputState *state = &output->state;
+                pixman_box32_t bounds = { state->x, state->y,
+                                          state->x + state->width,
+                                          state->y + state->height };
+
+                if (output->removed ||
+                    (!cursor && output->screen != root->window.screen))
+                    continue;
+                if (cursor ? !mb_input_cursor_intersects (root, output->screen,
+                                                          &node, &bounds)
+                           : node.x1 >= bounds.x2 || node.x2 <= bounds.x1 ||
+                                 node.y1 >= bounds.y2 || node.y2 <= bounds.y1)
+                    continue;
+                wl_list_for_each (binding, &output->resources, link)
+                {
+                    if (wl_resource_get_client (binding->resource) ==
+                            surface->client->wayland &&
+                        !surface_enter (surface, binding))
+                    {
+                        wl_resource_post_no_memory (surface->resource);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    wl_list_for_each (output, &compositor.outputs->outputs, link)
+    {
+        wl_list_for_each (binding, &output->resources, link)
+        {
+            wl_list_for_each_safe (membership, next, &binding->surfaces, link)
+            {
+                if (membership->seen)
+                    continue;
+                if (!membership->surface->client->failed)
+                    wl_surface_send_leave (membership->surface->resource,
+                                           binding->resource);
+                wl_list_remove (&membership->link);
+                free (membership);
+            }
+        }
+    }
+}
+
+void
+mb_outputs_surface_destroyed (MbSurface *surface)
+{
+    struct Output *output;
+    struct OutputResource *binding;
+    struct SurfaceOutput *membership, *next;
+
+    if (!compositor.outputs)
+        return;
+    wl_list_for_each (output, &compositor.outputs->outputs, link)
+    {
+        wl_list_for_each (binding, &output->resources, link)
+        {
+            wl_list_for_each_safe (membership, next, &binding->surfaces, link)
+            {
+                if (membership->surface != surface)
+                    continue;
+                wl_list_remove (&membership->link);
+                free (membership);
+            }
+        }
+    }
+}
+
 void
 mb_outputs_refresh (void)
 {
@@ -310,12 +481,19 @@ mb_outputs_refresh (void)
     {
         if (!output->seen && !output->removed)
         {
+            struct OutputResource *binding;
+
             output->removed = TRUE;
+            wl_list_for_each (binding, &output->resources, link)
+            {
+                clear_memberships (binding, TRUE);
+            }
             /* Keep the binding data alive for clients racing global removal.
              */
             wl_global_remove (output->global);
         }
     }
+    refresh_surfaces ();
     return;
 
 fail:
