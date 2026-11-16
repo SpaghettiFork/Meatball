@@ -535,7 +535,8 @@ incoming_property (Transfer *transfer, Bool initial)
         goto fail;
     if (initial && property->type == compositor.selections->atoms.incr)
     {
-        if (property->format != MB_PROPERTY_FORMAT_32 || property->size != 1)
+        /* Some owners, including xclip, omit the advisory byte count. */
+        if (property->format != MB_PROPERTY_FORMAT_32 || property->size > 1)
             goto fail;
         transfer->incr = TRUE;
         transfer->waiting = TRUE;
