@@ -84,7 +84,7 @@ struct MbXdgSurface
     int32_t last_width, last_height;
     int32_t min_width, min_height, max_width, max_height;
     Bool hints_changed;
-    Bool geometry_set;
+    Bool geometry_set, frame_extents_set;
     int32_t geometry_x, geometry_y, geometry_width, geometry_height;
     XID parent;
     XID window_id;
@@ -315,7 +315,7 @@ reset_mapping (struct MbXdgSurface *xdg)
 {
     reparent_children (xdg);
     xdg->initialized = xdg->configured = xdg->map_requested = FALSE;
-    xdg->geometry_set = FALSE;
+    xdg->geometry_set = xdg->frame_extents_set = FALSE;
     xdg->parent = None;
     memset (xdg->frame_extents, 0, sizeof (xdg->frame_extents));
     if (xdg->surface)
@@ -576,9 +576,12 @@ set_max_size (struct wl_client *client, struct wl_resource *resource,
                                 "negative maximum size");
         return;
     }
-    xdg->max_width = width;
-    xdg->max_height = height;
-    xdg->hints_changed = TRUE;
+    if (xdg->max_width != width || xdg->max_height != height)
+    {
+        xdg->max_width = width;
+        xdg->max_height = height;
+        xdg->hints_changed = TRUE;
+    }
 }
 
 static void
@@ -595,9 +598,12 @@ set_min_size (struct wl_client *client, struct wl_resource *resource,
                                 "negative minimum size");
         return;
     }
-    xdg->min_width = width;
-    xdg->min_height = height;
-    xdg->hints_changed = TRUE;
+    if (xdg->min_width != width || xdg->min_height != height)
+    {
+        xdg->min_width = width;
+        xdg->min_height = height;
+        xdg->hints_changed = TRUE;
+    }
 }
 
 static void
@@ -1108,15 +1114,23 @@ mb_xdg_map (MbSurface *surface)
             bottom - min (bottom, max (surface->scene_y, y2)),
         };
 
-        if (memcmp (xdg->frame_extents, extents, sizeof (extents)))
-            xdg->hints_changed = TRUE;
-        memcpy (xdg->frame_extents, extents, sizeof (extents));
-        if (dixChangeWindowProperty (surface->client->native, window,
-                                     compositor.atoms.gtk_frame_extents,
-                                     XA_CARDINAL, MB_PROPERTY_FORMAT_32,
-                                     PropModeReplace, ARRAY_SIZE (extents),
-                                     extents, TRUE) != Success)
-            return FALSE;
+        if (!xdg->frame_extents_set ||
+            memcmp (xdg->frame_extents, extents, sizeof (extents)))
+        {
+            xdg->hints_changed |=
+                xdg->frame_extents[0] + xdg->frame_extents[1] !=
+                    extents[0] + extents[1] ||
+                xdg->frame_extents[2] + xdg->frame_extents[3] !=
+                    extents[2] + extents[3];
+            if (dixChangeWindowProperty (surface->client->native, window,
+                                         compositor.atoms.gtk_frame_extents,
+                                         XA_CARDINAL, MB_PROPERTY_FORMAT_32,
+                                         PropModeReplace, ARRAY_SIZE (extents),
+                                         extents, TRUE) != Success)
+                return FALSE;
+            memcpy (xdg->frame_extents, extents, sizeof (extents));
+            xdg->frame_extents_set = TRUE;
+        }
     }
     if (!apply_bounds (surface, window))
         return FALSE;
