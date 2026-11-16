@@ -57,10 +57,10 @@ check.
 Use the SDK from the Spaghetti build that will load the module:
 
 ```sh
-cd /media/VMs/MeatballDev
-meson compile -C /media/VMs/SpaghettiDev/build
+cd [path to Meatball repository]
+meson compile -C [path to Spaghetti build]
 meson setup src/builddir src \
-    -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build
+    -Dspaghetti_build_dir=[path to Spaghetti build]
 meson compile -C src/builddir
 meson test -C src/builddir --print-errorlogs
 ```
@@ -68,7 +68,7 @@ meson test -C src/builddir --print-errorlogs
 `spaghetti_build_dir` names Spaghetti's configured build directory. It must
 contain `meson-info/intro-installed.json`. The source checkout itself is a
 different directory. For an already configured Meatball build, use
-`meson configure src/builddir -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build`.
+`meson configure src/builddir -Dspaghetti_build_dir=[path to Spaghetti build]`.
 The resulting module is `src/builddir/libsauce.so`.
 
 Build Spaghetti with Xvfb enabled first. The test host relinks its existing
@@ -85,8 +85,8 @@ Run the server built from that tree together with the newly built module.
 To select both when launching through `startx`:
 
 ```sh
-startx -- /media/VMs/SpaghettiDev/build/hw/xfree86/Xorg \
-    -modulepath /media/VMs/MeatballDev/src/builddir,/usr/lib/xorg/modules
+startx -- [path to Spaghetti build]/hw/xfree86/Xorg \
+    -modulepath [path to Meatball build]/src/builddir,/usr/lib/xorg/modules
 ```
 
 Sauce resolves its server API imports when loaded, so missing exports produce
