@@ -35,6 +35,7 @@
 #define FIXED_16_ONE 65536.0
 #define MILLISECONDS_PER_SECOND 1000
 #define INVALID_KEYMAP_FD (-1)
+#define INPUT_SERIAL_LIMIT 128
 
 enum ResourceKind
 {
@@ -56,6 +57,12 @@ struct Modifiers
     uint32_t depressed, latched, locked, group;
 };
 
+struct InputSerial
+{
+    uint32_t serial;
+    uint64_t client;
+};
+
 struct MbSeat
 {
     struct wl_list link, resources;
@@ -71,6 +78,8 @@ struct MbSeat
     int32_t repeat_rate, repeat_delay;
     MbSurface *pointer_focus, *keyboard_focus, *grab_focus, *pointer_root;
     uint32_t enter_serial, button_serial;
+    struct InputSerial serials[INPUT_SERIAL_LIMIT];
+    unsigned int serial_index;
     unsigned char keys[DOWN_LENGTH], buttons[DOWN_LENGTH];
     unsigned int button_count, grab_button;
     wl_fixed_t pointer_x, pointer_y;
@@ -138,6 +147,60 @@ find_seat (int device_id)
     return NULL;
 }
 
+static struct MbSeat *
+find_seat_id (uint64_t id)
+{
+    struct MbSeat *seat;
+
+    if (!compositor.input)
+        return NULL;
+    wl_list_for_each (seat, &compositor.input->seats, link)
+    {
+        if (seat->lifetime == id && !seat->removed && !seat->retire_pending)
+            return seat;
+    }
+    return NULL;
+}
+
+static void
+record_serial (struct MbSeat *seat, MbClient *client, uint32_t serial)
+{
+    unsigned int previous =
+        (seat->serial_index + INPUT_SERIAL_LIMIT - 1) % INPUT_SERIAL_LIMIT;
+
+    if (seat->serials[previous].serial == serial &&
+        seat->serials[previous].client == client->lifetime)
+        return;
+    seat->serials[seat->serial_index] =
+        (struct InputSerial){ serial, client->lifetime };
+    seat->serial_index = (seat->serial_index + 1) % INPUT_SERIAL_LIMIT;
+}
+
+MbClient *
+mb_input_keyboard_client (uint64_t id)
+{
+    struct MbSeat *seat = find_seat_id (id);
+
+    if (!seat || !seat->keyboard_focus || seat->keyboard_focus->client->failed)
+        return NULL;
+    return seat->keyboard_focus->client;
+}
+
+Bool
+mb_input_selection_serial (uint64_t id, MbClient *client, uint32_t serial)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    unsigned int i;
+
+    if (!seat || mb_input_keyboard_client (id) != client)
+        return FALSE;
+    for (i = 0; i < INPUT_SERIAL_LIMIT; i++)
+        if (seat->serials[i].serial == serial &&
+            seat->serials[i].client == client->lifetime)
+            return TRUE;
+    return FALSE;
+}
+
 static void
 resource_destroyed (struct wl_resource *resource)
 {
@@ -198,6 +261,7 @@ send_keyboard_enter (struct InputResource *input, uint32_t serial)
             pressed[count++] = key - XORG_KEYCODE_OFFSET;
     keys = (struct wl_array){ .size = count * sizeof (*pressed),
                               .data = pressed };
+    record_serial (seat, input->client, serial);
     wl_keyboard_send_enter (input->resource, serial,
                             seat->keyboard_focus->resource, &keys);
     wl_keyboard_send_modifiers (input->resource, serial,
@@ -386,6 +450,7 @@ get_pointer (struct wl_client *client, struct wl_resource *resource,
     }
     if (seat->pointer_focus && seat->pointer_focus->client == input->client)
     {
+        record_serial (seat, input->client, seat->enter_serial);
         wl_pointer_send_enter (input->resource, seat->enter_serial,
                                seat->pointer_focus->resource, seat->pointer_x,
                                seat->pointer_y);
@@ -452,6 +517,18 @@ static const struct wl_seat_interface seat_implementation = {
     .get_touch = get_touch,
     .release = release,
 };
+
+uint64_t
+mb_input_seat_id (struct wl_resource *resource)
+{
+    struct InputResource *input;
+
+    if (!wl_resource_instance_of (resource, &wl_seat_interface,
+                                  &seat_implementation))
+        return 0;
+    input = wl_resource_get_user_data (resource);
+    return input->seat->lifetime;
+}
 
 Bool
 mb_input_take_grab (MbSurface *surface, struct wl_resource *resource,
@@ -533,6 +610,7 @@ pointer_focus (struct MbSeat *seat, MbSurface *surface, wl_fixed_t x,
         }
         if (surface && surface->client == input->client)
         {
+            record_serial (seat, input->client, serial);
             wl_pointer_send_enter (input->resource, serial, surface->resource,
                                    x, y);
             send_pointer_frame (input);
@@ -561,6 +639,7 @@ keyboard_focus (struct MbSeat *seat, MbSurface *surface,
     memset (seat->keys, 0, sizeof (seat->keys));
     if (keys)
         memcpy (seat->keys, keys, sizeof (seat->keys));
+    mb_data_keyboard_focus (seat->lifetime, surface ? surface->client : NULL);
     wl_list_for_each (input, &seat->resources, link)
     {
         if (input->kind != RESOURCE_KEYBOARD || input->client->failed)
@@ -602,9 +681,12 @@ modifiers_changed (struct MbSeat *seat, struct Modifiers modifiers)
         if (input->kind == RESOURCE_KEYBOARD && seat->keyboard_focus &&
             input->client == seat->keyboard_focus->client &&
             !input->client->failed)
+        {
+            record_serial (seat, input->client, serial);
             wl_keyboard_send_modifiers (input->resource, serial,
                                         modifiers.depressed, modifiers.latched,
                                         modifiers.locked, modifiers.group);
+        }
     }
 }
 
@@ -845,6 +927,7 @@ retire_seat (struct MbSeat *seat)
     seat->button_count = 0;
     seat->capabilities = 0;
     seat->removed = TRUE;
+    mb_data_seat_removed (seat->lifetime);
     repeat_changed (seat, 0, seat->repeat_delay);
     wl_global_remove (seat->global);
     wl_list_for_each (resource, &seat->resources, link)
@@ -1125,10 +1208,13 @@ pointer_button (struct MbSeat *seat, unsigned int detail, Bool pressed,
                                   wl_fixed_from_int (direction * SCROLL_STEP));
         }
         else
+        {
+            record_serial (seat, input->client, serial);
             wl_pointer_send_button (input->resource, serial, time, button,
                                     pressed
                                         ? WL_POINTER_BUTTON_STATE_PRESSED
                                         : WL_POINTER_BUTTON_STATE_RELEASED);
+        }
         send_pointer_frame (input);
     }
     if (!seat->button_count)
@@ -1158,10 +1244,13 @@ keyboard_key (struct MbSeat *seat, const xXIDeviceEvent *event)
         if (input->kind == RESOURCE_KEYBOARD &&
             input->client == seat->keyboard_focus->client &&
             !input->client->failed)
+        {
+            record_serial (seat, input->client, serial);
             wl_keyboard_send_key (input->resource, serial, event->time,
                                   key - XORG_KEYCODE_OFFSET,
                                   pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
                                           : WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
     }
 }
 

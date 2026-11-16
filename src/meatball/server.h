@@ -8,6 +8,7 @@
 #include "meatball_log.h"
 #include "native_client.h"
 #include "native_cursor.h"
+#include "native_data.h"
 #include "native_input.h"
 #include "native_keymap.h"
 #include "native_output.h"
@@ -37,6 +38,7 @@ typedef struct
     struct wl_list clients;
     struct MbInput *input;
     struct MbOutputs *outputs;
+    struct MbData *data;
     struct wl_listener client_created;
     MbClient *bridge_client;
     int clients_fd;
