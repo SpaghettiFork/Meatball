@@ -62,6 +62,9 @@ dkms.conf
 src/build
 src/builddir
 
+# Retired sources kept locally
+.old/
+
 # AI slop?
 opencode.json
 mimocode.json
