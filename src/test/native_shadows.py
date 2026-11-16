@@ -12,7 +12,8 @@ from host_support import connect_x11, server, STARTUP_TIMEOUT
 from native_clients import intern_atom, property32, XA_CARDINAL
 from native_lifecycle import wait_socket, POLL_INTERVAL
 from native_surfaces import root_window, query_tree, shape_rectangles, SHAPE_BOUNDING
-from native_transforms import attach_rows, image, transformed, SURFACE_SCALE, SURFACE_TRANSFORM
+from native_transforms import (attach_rows, image, transformed, SURFACE_SCALE,
+                               SURFACE_TRANSFORM, dimensions)
 from native_xdg import (XdgClient, XDG_GEOMETRY, TOP_DESTROY, XDG_DESTROY,
                         XA_WM_SIZE_HINTS)
 
@@ -35,7 +36,7 @@ WIDTH = 12
 HEIGHT = 10
 GEOMETRY = (3, 2, 6, 5)
 FULL_BOUNDS = [(0, 0, WIDTH, HEIGHT)]
-GEOMETRY_BOUNDS = [GEOMETRY]
+GEOMETRY_BOUNDS = [(0, 0, GEOMETRY[2], GEOMETRY[3])]
 HINT_MIN_SIZE = 1 << 4
 HINT_RESIZE_INC = 1 << 6
 HINT_BASE_SIZE = 1 << 8
@@ -111,19 +112,20 @@ def check_shadows(path, display, x11, root, scale=1, transform=0, composited=Fal
         expected = tuple(WINDOW_COLOR & RGB_MASK if x <= column < x + width and y <= row < y + height
                          else DESKTOP_COLOR for row in range(HEIGHT) for column in range(WIDTH))
         wait_desktop(x11, root, expected)
-        assert property32(x11, window, "_GTK_FRAME_EXTENTS", XA_CARDINAL) == (
-            x, WIDTH - x - width, y, HEIGHT - y - height)
+        assert dimensions(x11, window) == (width, height)
+        assert property32(x11, window, "_GTK_FRAME_EXTENTS", XA_CARDINAL) == (0, 0, 0, 0)
+        hints = property32(x11, window, "WM_NORMAL_HINTS", XA_WM_SIZE_HINTS)
+        assert not hints[0] & (HINT_RESIZE_INC | HINT_BASE_SIZE)
+        assert hints[HINT_BASE] == (0, 0)
+
+        set_compositor(manager, owner, selection)
+        wait_shape(x11, window, FULL_BOUNDS)
         hints = property32(x11, window, "WM_NORMAL_HINTS", XA_WM_SIZE_HINTS)
         assert hints[0] == HINT_MIN_SIZE | HINT_RESIZE_INC | HINT_BASE_SIZE
         assert hints[HINT_BASE] == (WIDTH - width, HEIGHT - height)
         assert hints[HINT_INCREMENTS] == (1, 1)
-        # Size readouts express native dimensions relative to the shadow base.
-        native_size = (WIDTH, HEIGHT)
         assert tuple((size - base) // increment for size, base, increment in
-                     zip(native_size, hints[HINT_BASE], hints[HINT_INCREMENTS])) == (width, height)
-
-        set_compositor(manager, owner, selection)
-        wait_shape(x11, window, FULL_BOUNDS)
+                     zip(dimensions(x11, window), hints[HINT_BASE], hints[HINT_INCREMENTS])) == (width, height)
         # The compositor receives the original alpha and translucent shadow pixels.
         expected_pixels = tuple(pixel for row in rows for pixel in row)
         deadline = time.monotonic() + STARTUP_TIMEOUT
@@ -152,7 +154,7 @@ def check_shadows(path, display, x11, root, scale=1, transform=0, composited=Fal
         wait_shape(x11, window, GEOMETRY_BOUNDS)
         client.commit()
         client.sync()
-        wait_shape(x11, window, [(1, 1, WIDTH - 2, HEIGHT - 2)])
+        wait_shape(x11, window, [(0, 0, WIDTH - 2, HEIGHT - 2)])
         for geometry, bounds in (((-1, -1, WIDTH + 2, HEIGHT + 2), FULL_BOUNDS),
                                  ((WIDTH + 1, HEIGHT + 1, 1, 1), [])):
             client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *geometry))
@@ -171,7 +173,7 @@ def check_shadows(path, display, x11, root, scale=1, transform=0, composited=Fal
         client.attach(0)
         client.commit()
         client.sync()
-        wait_shape(x11, window, FULL_BOUNDS)
+        wait_shape(x11, window, GEOMETRY_BOUNDS)
         client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *GEOMETRY))
         client.commit()
         client.configure()
@@ -186,7 +188,7 @@ def check_shadows(path, display, x11, root, scale=1, transform=0, composited=Fal
         client.send(client.top, TOP_DESTROY)
         client.send(client.xdg, XDG_DESTROY)
         client.sync()
-        wait_shape(x11, window, FULL_BOUNDS)
+        wait_shape(x11, window, GEOMETRY_BOUNDS)
     finally:
         if manager:
             manager.close()

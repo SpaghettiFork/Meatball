@@ -26,12 +26,15 @@ and remapping.
 Toplevels use client-side decorations and request an undecorated X11 window
 through `_MOTIF_WM_HINTS`. Window geometry supplies `_GTK_FRAME_EXTENTS` for
 client-drawn shadows. Server-side decoration negotiation remains to be ported.
-When the screen has no X11 compositor, the native bounding shape clips shadow
-margins to the client's committed window geometry. Compositor ownership changes
-update this shape automatically; a composited desktop retains the full alpha
-buffer and its shadows. ICCCM base-size hints exclude shadow margins from the
-window manager's resize dimensions. Repaints preserve unchanged input shapes,
-frame extents, and size hints.
+When the screen has no X11 compositor, the native window canvas excludes the
+client's shadow margins while retaining visible subsurfaces outside the parent.
+Compositor ownership changes update the canvas and input coordinates
+automatically; a composited desktop retains the full alpha buffer and its
+shadows. ICCCM base-size hints account for the remaining margins on composited
+desktops. Maximized and fullscreen canvases follow the committed window
+geometry, keeping transient status subsurfaces from changing the window size.
+Window geometry changes preserve the visible window's position. Repaints
+preserve unchanged input shapes, frame extents, and size hints.
 
 Version 1 `wl_subcompositor` supports synchronized and desynchronized content
 updates, nested subsurfaces, parent-committed positions, and stacking above or
@@ -192,6 +195,8 @@ fractional rectangles, commit timing, protocol errors, destruction, and resets.
 alpha, compositor ownership changes, resize size hints, geometry commits,
 remapping, and resets. `native-geometry` checks that input-driven repaints keep
 native geometry stable and only changed shapes and hints emit notifications.
+It also checks cropped input coordinates, visible window placement, and status
+subsurfaces extending past maximized and fullscreen window edges.
 `native-subsurfaces` checks synchronized content, nested commit dependencies,
 parent-committed position and stacking, alpha, negative coordinates, input
 regions, buffer transforms and viewports, role lifetime, destruction, and reset.

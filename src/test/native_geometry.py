@@ -8,12 +8,14 @@ import tempfile
 from host_support import connect_x11, receive_exact, server
 from native_clients import intern_atom, XA_ATOM
 from native_input import (XInput, InputClient, map_window, GET_INPUT_FOCUS,
-                          X11_REPLY_SIZE, MOTION, BUTTON_PRESS, BUTTON_RELEASE)
+                          X11_REPLY_SIZE, MOTION, BUTTON_PRESS, BUTTON_RELEASE,
+                          POINTER_ENTER, POINTER_MOTION, WINDOW_ORIGIN)
 from native_lifecycle import wait_socket
 from native_subsurfaces import (publish, solid, BLUE, RED, child,
                                 DESTROY, ATTACH, COMMIT)
 from native_surfaces import root_window, query_tree
 from native_transforms import dimensions, wait_image
+from native_shadows import manager_window, set_compositor
 from native_xdg import (XDG_GEOMETRY, TOP_MIN_SIZE, TOP_MAX_SIZE,
                         CHANGE_ATTRIBUTES, CW_EVENT_MASK, CHANGE_PROPERTY,
                         SEND_EVENT_FLAG)
@@ -42,6 +44,8 @@ STATUS_HEIGHT = 25
 STATUS_Y = SURFACE_SIZE - STATUS_HEIGHT + 1
 PROPERTY_FORMAT = 32
 PROPERTY_REPLACE = 0
+GET_GEOMETRY = 14
+FIXED_ONE = 256
 
 
 class Watcher:
@@ -101,6 +105,9 @@ def check_repaints(path, display):
     try:
         window, = query_tree(x11, root) - before
         actor = XInput(x11, root)
+        owner = manager_window(x11, setup, root)
+        set_compositor(x11, owner, intern_atom(x11, "_NET_WM_CM_S0"))
+        actor.sync()
         client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *GEOMETRY))
         client.send(client.top, TOP_MIN_SIZE, struct.pack("=ii", *MIN_SIZE))
         client.send(client.top, TOP_MAX_SIZE, struct.pack("=ii", *MAX_SIZE))
@@ -135,7 +142,7 @@ def check_repaints(path, display):
         client.commit()
         client.sync()
         shapes, properties = watcher.changes(watcher.events())
-        assert shapes == [SHAPE_BOUNDING], shapes
+        assert not shapes, shapes
         assert properties == {"_GTK_FRAME_EXTENTS": 1, "WM_NORMAL_HINTS": 0}, properties
         client.send(client.top, TOP_MIN_SIZE, struct.pack("=ii", MIN_SIZE[0] + 1, MIN_SIZE[1]))
         client.commit()
@@ -146,6 +153,44 @@ def check_repaints(path, display):
     finally:
         if watcher:
             watcher.close()
+        client.close()
+        x11.close()
+
+
+def check_cropped_input(path, display):
+    x11, setup = connect_x11(display, return_setup=True)
+    root = root_window(setup)
+    before = query_tree(x11, root)
+    client = InputClient(path)
+    try:
+        actor = XInput(x11, root)
+        actor.fake(MOTION, x=0, y=0)
+        actor.sync()
+        window, = query_tree(x11, root) - before
+        client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *GEOMETRY))
+        input_region(client, GEOMETRY)
+        map_window(client, x11, root, window=window)
+        assert dimensions(x11, window) == GEOMETRY[2:]
+        actor.fake(MOTION, x=WINDOW_ORIGIN + 1, y=WINDOW_ORIGIN + 1)
+        data, _ = client.until(client.pointer, POINTER_ENTER)
+        assert struct.unpack_from("=ii", data, 8) == ((GEOMETRY[0] + 1) * FIXED_ONE,
+                                                     (GEOMETRY[1] + 1) * FIXED_ONE)
+        changed = (GEOMETRY[0] + 1, GEOMETRY[1] + 1, *GEOMETRY[2:])
+        client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", *changed))
+        input_region(client, changed)
+        client.commit()
+        client.sync()
+        x11.sendall(struct.pack("<BBHI", GET_GEOMETRY, 0, 2, window))
+        reply = receive_exact(x11, X11_REPLY_SIZE)
+        assert reply[0] == 1
+        assert struct.unpack_from("<hhHH", reply, 12) == (WINDOW_ORIGIN, WINDOW_ORIGIN, *GEOMETRY[2:])
+        actor.fake(MOTION, x=WINDOW_ORIGIN + 2, y=WINDOW_ORIGIN + 2)
+        while True:
+            data, _ = client.until(client.pointer, POINTER_MOTION)
+            if struct.unpack_from("=ii", data, 4) == ((changed[0] + 2) * FIXED_ONE,
+                                                     (changed[1] + 2) * FIXED_ONE):
+                break
+    finally:
         client.close()
         x11.close()
 
@@ -207,6 +252,7 @@ def main():
                     arguments=["+extension", "XTEST"]) as (process, display):
             wait_socket(path, process)
             check_repaints(path, display)
+            check_cropped_input(path, display)
             check_maximized_subsurfaces(path, display)
             check_maximized_subsurfaces(path, display, fullscreen=True)
             assert process.poll() is None

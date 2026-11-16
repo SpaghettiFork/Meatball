@@ -362,6 +362,16 @@ refresh_surfaces (void)
 
             if (!cursor)
             {
+                node.x1 = max (node.x1, root->scene_x);
+                node.y1 = max (node.y1, root->scene_y);
+                node.x2 = min (node.x2,
+                               root->scene_x + min (root->scene_width,
+                                                    window->drawable.width));
+                node.y2 = min (node.y2,
+                               root->scene_y + min (root->scene_height,
+                                                    window->drawable.height));
+                if (node.x1 >= node.x2 || node.y1 >= node.y2)
+                    continue;
                 int32_t x = window->drawable.x + root->window.screen->x -
                             root->scene_x;
                 int32_t y = window->drawable.y + root->window.screen->y -
