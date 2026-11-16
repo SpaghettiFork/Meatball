@@ -145,6 +145,12 @@ different directory. For an already configured Meatball build, use
 `meson configure src/builddir -Dspaghetti_build_dir=/media/VMs/SpaghettiDev/build`.
 The resulting module is `src/builddir/libsauce.so`.
 
+Startup logs include `meatball: Build <revision>` before the socket path. The
+revision records the Git commit and a `-dirty` suffix for local tracked changes;
+source archives use the project version. Compare this line in the running
+Xorg log with the revision you built after installing the module and restarting
+Spaghetti.
+
 The SDK must include the 32-bit native SHM stride parameter and the exported
 XACE send-access hook, `XISetEventMask`, and `RT_XKBCLIENT` on Spaghetti's
 `meatball` branch. The configuration

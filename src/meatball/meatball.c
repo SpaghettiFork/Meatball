@@ -17,6 +17,8 @@
  */
 #include "server.h"
 
+#include "build_version.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -105,6 +107,7 @@ meatball_initialize (const struct meatball_config *config)
         goto fail;
     close (socket_fd);
     free (socket_fd_path);
+    mb_log (X_INFO, "meatball: Build %s\n", MEATBALL_BUILD_ID);
     mb_log (X_INFO, "meatball: Listening on %s\n", compositor.socket_path);
     return MEATBALL_TRUE;
 
