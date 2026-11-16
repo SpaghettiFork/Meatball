@@ -43,8 +43,15 @@ enum WmMoveResize
 #define WM_HINT_MIN_HEIGHT 6
 #define WM_HINT_MAX_WIDTH 7
 #define WM_HINT_MAX_HEIGHT 8
+#define WM_HINT_WIDTH_INC 9
+#define WM_HINT_HEIGHT_INC 10
+#define WM_HINT_BASE_WIDTH 15
+#define WM_HINT_BASE_HEIGHT 16
 #define WM_HINT_MIN_SIZE (1u << 4)
 #define WM_HINT_MAX_SIZE (1u << 5)
+#define WM_HINT_RESIZE_INC (1u << 6)
+#define WM_HINT_BASE_SIZE (1u << 8)
+#define WM_RESIZE_INCREMENT 1
 #define MAX_TOPLEVEL_STATES 3
 #define WM_STATE_ATOM_LIMIT 128
 #define MOTIF_HINT_WORDS 5
@@ -1116,8 +1123,18 @@ mb_xdg_map (MbSurface *surface)
     if (xdg->hints_changed)
     {
         CARD32 hints[WM_SIZE_HINT_WORDS] = { 0 };
+        CARD32 horizontal = xdg->frame_extents[0] + xdg->frame_extents[1];
+        CARD32 vertical = xdg->frame_extents[2] + xdg->frame_extents[3];
 
-        if (xdg->min_width || xdg->min_height)
+        if (horizontal || vertical)
+        {
+            hints[WM_HINT_FLAGS] |= WM_HINT_BASE_SIZE | WM_HINT_RESIZE_INC;
+            hints[WM_HINT_BASE_WIDTH] = horizontal;
+            hints[WM_HINT_BASE_HEIGHT] = vertical;
+            hints[WM_HINT_WIDTH_INC] = WM_RESIZE_INCREMENT;
+            hints[WM_HINT_HEIGHT_INC] = WM_RESIZE_INCREMENT;
+        }
+        if (xdg->min_width || xdg->min_height || horizontal || vertical)
             hints[WM_HINT_FLAGS] |= WM_HINT_MIN_SIZE;
         if (xdg->max_width || xdg->max_height)
             hints[WM_HINT_FLAGS] |= WM_HINT_MAX_SIZE;
