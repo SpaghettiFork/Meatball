@@ -179,6 +179,7 @@ surface_destroyed (struct wl_resource *resource)
     struct Frame *frame, *next;
     MbSurfaceCommit *commit, *next_commit;
 
+    mb_data_surface_destroyed (surface);
     mb_outputs_surface_destroyed (surface);
     mb_input_surface_destroyed (surface);
     mb_subsurface_surface_destroyed (surface);
@@ -336,7 +337,12 @@ apply_input (MbSurface *surface, WindowPtr native)
     Bool success = FALSE;
 
     pixman_region32_init (&aggregate);
-    if (surface->pixels && surface->stack_count > 1)
+    if (surface->role == MB_ROLE_DRAG_ICON)
+    {
+        input_default = FALSE;
+        area = &aggregate;
+    }
+    else if (surface->pixels && surface->stack_count > 1)
     {
         MbSceneIterator iterator = { .root = surface, .surface = surface };
         MbSurface *node;
@@ -615,7 +621,7 @@ mb_surface_update (MbSurface *surface)
         Mask mask = CWWidth | CWHeight;
         unsigned int count = 0;
 
-        if (offset)
+        if (offset && surface->role != MB_ROLE_DRAG_ICON)
         {
             int64_t x = (int64_t)native->origin.x + surface->offset_x + x1 -
                         surface->scene_x;
@@ -647,9 +653,9 @@ mb_surface_update (MbSurface *surface)
     }
     if (!mb_input_cursor_changed (surface))
         goto fail;
-    surface->offset_x = surface->offset_y = 0;
-    if (!apply_input (surface, native))
+    if (!apply_input (surface, native) || !mb_data_icon_changed (surface))
         goto fail;
+    surface->offset_x = surface->offset_y = 0;
     if (!mb_xdg_map (surface) || !redraw (surface))
         goto fail;
     return TRUE;
