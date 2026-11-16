@@ -342,3 +342,15 @@ braces, and a 79 column limit.
 
 Record implementation progress and repository knowledge in this file. Keep
 the README limited to the introduction, the build snippet, and the license.
+
+## X11 bridge work
+
+The data-device backend supports native data sources through `MbDataSourceOps`.
+The receive callback takes ownership of the destination FD. Source notifications
+cover target, action, drop, completion, cancellation, and destruction; providers
+must defer source destruction until notification handling returns. Native
+sources share MIME validation and offer lifetime handling with Wayland sources.
+`MbDataBridge` observes local selection changes and source destruction.
+`mb_data_import_selection` publishes a foreign selection to active seats and
+newly created data devices. These are private module interfaces; configuration
+ABI 2.0 and the Xorg extension ABI remain unchanged.
