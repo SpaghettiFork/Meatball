@@ -29,7 +29,9 @@ client-drawn shadows. Server-side decoration negotiation remains to be ported.
 When the screen has no X11 compositor, the native bounding shape clips shadow
 margins to the client's committed window geometry. Compositor ownership changes
 update this shape automatically; a composited desktop retains the full alpha
-buffer and its shadows.
+buffer and its shadows. ICCCM base-size hints exclude shadow margins from the
+window manager's resize dimensions. Repaints preserve unchanged input shapes,
+frame extents, and size hints.
 
 Version 1 `wl_subcompositor` supports synchronized and desynchronized content
 updates, nested subsurfaces, parent-committed positions, and stacking above or
@@ -187,7 +189,9 @@ geometry, retained pixels after release, and invalid surface state.
 `native-viewport` checks cropped pixels across buffer orientations and scales,
 fractional rectangles, commit timing, protocol errors, destruction, and resets.
 `native-shadows` checks desktop pixels around client shadow margins, preserved
-alpha, compositor ownership changes, geometry commits, remapping, and resets.
+alpha, compositor ownership changes, resize size hints, geometry commits,
+remapping, and resets. `native-geometry` checks that input-driven repaints keep
+native geometry stable and only changed shapes and hints emit notifications.
 `native-subsurfaces` checks synchronized content, nested commit dependencies,
 parent-committed position and stacking, alpha, negative coordinates, input
 regions, buffer transforms and viewports, role lifetime, destruction, and reset.

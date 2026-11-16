@@ -70,6 +70,9 @@ if spaghetti_build_dir != ''
     test('native-xdg', python,
          args: ['-B', files('native_xdg.py'), test_host, sauce],
          timeout: 30)
+    test('native-geometry', python,
+         args: ['-B', files('native_geometry.py'), test_host, sauce],
+         timeout: 30)
     test('native-shadows', python,
          args: ['-B', files('native_shadows.py'), test_host, sauce],
          timeout: 30)

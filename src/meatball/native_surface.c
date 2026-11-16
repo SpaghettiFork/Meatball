@@ -405,7 +405,9 @@ apply_input (MbSurface *surface, WindowPtr native)
         if (!input)
             goto out;
     }
-    if (!input_default || wInputShape (native))
+    if ((input || wInputShape (native)) &&
+        !(input && wInputShape (native) &&
+          RegionEqual (input, wInputShape (native))))
     {
         if (!MakeWindowOptional (native))
         {
