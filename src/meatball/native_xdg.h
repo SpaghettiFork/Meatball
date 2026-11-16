@@ -15,6 +15,7 @@ extern void mb_xdg_capture (MbSurfaceCommit *commit);
 extern void mb_xdg_apply (MbSurfaceCommit *commit);
 extern void mb_xdg_commit_free (MbSurfaceCommit *commit);
 extern Bool mb_xdg_map (MbSurface *surface);
+extern Bool mb_xdg_resize_pending (MbSurface *surface);
 extern Bool mb_xdg_surface_destroy_request (MbSurface *surface);
 extern void mb_xdg_surface_destroyed (MbSurface *surface);
 extern void mb_xdg_event (MbSurface *surface, const xEvent *event);

@@ -627,40 +627,57 @@ mb_surface_update (MbSurface *surface)
     {
         surface->scene_width = surface->scene_height = 0;
         surface->scene_x = surface->scene_y = 0;
+        surface->native_dx = surface->native_dy = 0;
         UnmapWindow (native, FALSE);
     }
-    else if (offset || surface->scene_width != x2 - x1 ||
-             surface->scene_height != y2 - y1)
+    else if (offset || surface->native_dx || surface->native_dy ||
+             surface->scene_width != x2 - x1 ||
+             surface->scene_height != y2 - y1 ||
+             native->drawable.width != x2 - x1 ||
+             native->drawable.height != y2 - y1)
     {
-        XID values[4];
-        Mask mask = CWWidth | CWHeight;
-        unsigned int count = 0;
+        int64_t dx = surface->native_dx + surface->offset_x + x1 -
+                     surface->scene_x + anchor_x;
+        int64_t dy = surface->native_dy + surface->offset_y + y1 -
+                     surface->scene_y + anchor_y;
 
-        if (offset && surface->role != MB_ROLE_DRAG_ICON)
+        if (mb_xdg_resize_pending (surface))
         {
-            int64_t x = (int64_t)native->origin.x - native->borderWidth +
-                        surface->offset_x + x1 - surface->scene_x + anchor_x;
-            int64_t y = (int64_t)native->origin.y - native->borderWidth +
-                        surface->offset_y + y1 - surface->scene_y + anchor_y;
-
-            if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
-                y > INT16_MAX)
-            {
-                wl_resource_post_error (
-                    surface->resource, WL_SURFACE_ERROR_INVALID_SIZE,
-                    "buffer offset exceeds native coordinates");
-                return FALSE;
-            }
-            values[count++] = (INT32)x;
-            values[count++] = (INT32)y;
-            mask |= CWX | CWY;
+            surface->native_dx = dx;
+            surface->native_dy = dy;
         }
-        values[count++] = x2 - x1;
-        values[count++] = y2 - y1;
+        else
+        {
+            XID values[4];
+            Mask mask = CWWidth | CWHeight;
+            unsigned int count = 0;
 
-        if (ConfigureWindow (native, mask, values, surface->client->native) !=
-            Success)
-            goto fail;
+            if ((dx || dy) && surface->role != MB_ROLE_DRAG_ICON)
+            {
+                int64_t x =
+                    (int64_t)native->origin.x - native->borderWidth + dx;
+                int64_t y =
+                    (int64_t)native->origin.y - native->borderWidth + dy;
+
+                if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
+                    y > INT16_MAX)
+                {
+                    wl_resource_post_error (
+                        surface->resource, WL_SURFACE_ERROR_INVALID_SIZE,
+                        "buffer offset exceeds native coordinates");
+                    return FALSE;
+                }
+                values[count++] = (INT32)x;
+                values[count++] = (INT32)y;
+                mask |= CWX | CWY;
+            }
+            values[count++] = x2 - x1;
+            values[count++] = y2 - y1;
+            if (ConfigureWindow (native, mask, values,
+                                 surface->client->native) != Success)
+                goto fail;
+            surface->native_dx = surface->native_dy = 0;
+        }
         surface->scene_width = x2 - x1;
         surface->scene_height = y2 - y1;
         surface->scene_x = x1;
