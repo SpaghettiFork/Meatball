@@ -29,6 +29,7 @@ XA_INTEGER = 19
 XA_STRING = 31
 LARGE_PAYLOAD = bytes(range(256)) * 4096
 CHUNK_SIZE = 16384
+LARGE_X_CHUNK = 128 * 1024
 BLOCKED_PIPE_SIZE = 4096
 
 
@@ -188,15 +189,15 @@ class XSelections:
         self.change(window, property, type, data, format)
         self.notify(request, property)
 
-    def incr(self, request, type, payload):
+    def incr(self, request, type, payload, size_hint=True, chunk=CHUNK_SIZE):
         _, window, _, _, property = request
         self.watch(window)
-        self.answer(request, self.atom("INCR"), [len(payload)], 32)
-        for offset in range(0, len(payload) + CHUNK_SIZE, CHUNK_SIZE):
+        self.answer(request, self.atom("INCR"), [len(payload)] if size_hint else [], 32)
+        for offset in range(0, len(payload) + chunk, chunk):
             self.event(PROPERTY_NOTIFY, lambda event:
                        struct.unpack_from("<II", event, 4) == (window, property)
                        and event[16] == PROPERTY_DELETE)
-            self.change(window, property, type, payload[offset:offset + CHUNK_SIZE])
+            self.change(window, property, type, payload[offset:offset + chunk])
 
 
 def pipe_result(reader):
@@ -286,20 +287,24 @@ def check_clipboard(path, display):
             assert pipe_result(reader) == expected
             os.close(reader)
         # INCR backpressure is driven by the Wayland reader, not server blocking.
-        reader = receive_pipe(client, offer, MIME_BINARY)
-        request = peer.request(MIME_BINARY)
-        pid = os.fork()
-        if pid == 0:
+        # Also accept owners that omit the advisory size and use large chunks.
+        for size_hint in (True, False):
+            reader = receive_pipe(client, offer, MIME_BINARY)
+            request = peer.request(MIME_BINARY)
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    assert pipe_result(reader) == LARGE_PAYLOAD
+                    os._exit(0)
+                except BaseException:
+                    os._exit(1)
             try:
-                assert pipe_result(reader) == LARGE_PAYLOAD
-                os._exit(0)
-            except BaseException:
-                os._exit(1)
-        try:
-            peer.incr(request, peer.atom(MIME_BINARY), LARGE_PAYLOAD)
-            assert os.waitpid(pid, 0)[1] == 0
-        finally:
-            os.close(reader)
+                peer.incr(request, peer.atom(MIME_BINARY), LARGE_PAYLOAD,
+                          size_hint=size_hint,
+                          chunk=CHUNK_SIZE if size_hint else LARGE_X_CHUNK)
+                assert os.waitpid(pid, 0)[1] == 0
+            finally:
+                os.close(reader)
         # A reader that stops consuming keeps the X owner waiting for deletion.
         reader = receive_pipe(client, offer, MIME_BINARY)
         fcntl.fcntl(reader, fcntl.F_SETPIPE_SZ, BLOCKED_PIPE_SIZE)
