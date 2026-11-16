@@ -10,6 +10,7 @@ from host_support import connect_x11, receive_exact, server
 from native_keymap import Keymaps, KEY_Y
 from native_lifecycle import wait_socket
 from native_subsurfaces import child, publish, solid, RED, BLUE
+from native_surfaces import input_output_windows
 from native_surfaces import root_window, query_tree
 from native_xdg import XdgClient
 
@@ -180,7 +181,7 @@ class InputClient(XdgClient):
 
 def map_window(client, x11, root, window=None, origin=WINDOW_ORIGIN):
     if window is None:
-        window, = query_tree(x11, root)
+        window, = input_output_windows(x11, root)
     client.commit()
     client.configure()
     publish(client, client.surface, solid(RED, WINDOW_SIZE, WINDOW_SIZE))
@@ -327,7 +328,7 @@ def check_input(path, x11, root):
         before = query_tree(x11, root)
         peer = InputClient(path)
         try:
-            peer_window, = query_tree(x11, root) - before
+            peer_window, = input_output_windows(x11, root) - before
             map_window(peer, x11, root, window=peer_window, origin=PEER_WINDOW_ORIGIN)
             actor.focus(window)
             actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)

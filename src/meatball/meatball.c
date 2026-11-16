@@ -36,8 +36,7 @@ void
 meatball_version (unsigned long *version)
 {
     *version =
-        MODULE_VERSION_NUMERIC (MEATBALL_VERSION_MAJOR,
-                                MEATBALL_VERSION_MINOR,
+        MODULE_VERSION_NUMERIC (MEATBALL_VERSION_MAJOR, MEATBALL_VERSION_MINOR,
                                 MEATBALL_VERSION_PATCH);
 }
 
@@ -103,7 +102,7 @@ meatball_initialize (const struct meatball_config *config)
         !mb_xdg_initialize () || !mb_viewport_initialize () ||
         !mb_subsurfaces_initialize () || !mb_input_initialize () ||
         !mb_outputs_initialize () || !mb_data_initialize () ||
-        !mb_loop_initialize ())
+        !mb_selections_initialize () || !mb_loop_initialize ())
         goto fail;
     close (socket_fd);
     free (socket_fd_path);
@@ -124,6 +123,7 @@ void
 meatball_shutdown (void)
 {
     mb_loop_shutdown ();
+    mb_selections_shutdown ();
     mb_data_shutdown ();
     mb_outputs_shutdown ();
     mb_input_shutdown ();

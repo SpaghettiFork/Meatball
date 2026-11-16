@@ -12,6 +12,8 @@ from native_lifecycle import wait_socket, QUERY_EXTENSION
 from wayland_support import Wayland
 
 QUERY_TREE = 15
+GET_ATTRIBUTES = 3
+INPUT_OUTPUT = 1
 X11_REPLY_SIZE = 32
 SETUP_SIZE = 32
 PIXMAP_FORMAT_SIZE = 8
@@ -46,6 +48,19 @@ def query_tree(x11, window):
     count, = struct.unpack_from("<H", reply, 16)
     payload = receive_exact(x11, words * 4)
     return set(struct.unpack(f"<{count}I", payload))
+
+
+def input_output_windows(x11, root):
+    """Exclude unmapped InputOnly windows used by selection protocols."""
+    result = set()
+    for window in query_tree(x11, root):
+        x11.sendall(struct.pack("<BBHI", GET_ATTRIBUTES, 0, 2, window))
+        reply = receive_exact(x11, X11_REPLY_SIZE)
+        assert reply[0] == 1
+        receive_exact(x11, struct.unpack_from("<I", reply, 4)[0] * 4)
+        if struct.unpack_from("<H", reply, 12)[0] == INPUT_OUTPUT:
+            result.add(window)
+    return result
 
 
 def shape_rectangles(x11, window, kind=SHAPE_INPUT):

@@ -1374,6 +1374,9 @@ mb_data_seat_removed (uint64_t id)
             source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
             seat->selection = NULL;
         }
+        if (compositor.data->bridge && compositor.data->bridge->removed)
+            compositor.data->bridge->removed (compositor.data->bridge_data,
+                                              seat->id);
         seat->focus = 0;
         seat->removed = TRUE;
         invalidate_selection (seat);

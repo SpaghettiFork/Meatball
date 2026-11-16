@@ -12,6 +12,7 @@
 #include "native_input.h"
 #include "native_keymap.h"
 #include "native_output.h"
+#include "native_selection.h"
 #include "native_shm.h"
 #include "native_subsurface.h"
 #include "native_surface.h"
@@ -39,6 +40,7 @@ typedef struct
     struct MbInput *input;
     struct MbOutputs *outputs;
     struct MbData *data;
+    struct MbSelections *selections;
     struct wl_listener client_created;
     MbClient *bridge_client;
     int clients_fd;

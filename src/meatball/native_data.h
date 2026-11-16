@@ -27,6 +27,7 @@ typedef struct
 typedef struct
 {
     void (*selection) (void *data, uint64_t seat, MbDataSource *source);
+    void (*removed) (void *data, uint64_t seat);
     void (*destroyed) (void *data, MbDataSource *source);
 } MbDataBridge;
 

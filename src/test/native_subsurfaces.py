@@ -9,6 +9,7 @@ import tempfile
 
 from host_support import connect_x11, receive_exact, server
 from native_lifecycle import wait_socket
+from native_surfaces import input_output_windows
 from native_surfaces import create_surface, root_window, query_tree, shape_rectangles
 from native_transforms import attach_rows, wait_image, transformed, SURFACE_SCALE, SURFACE_TRANSFORM
 from native_xdg import XdgClient, map_state, XDG_GEOMETRY, XDG_GET_SURFACE
@@ -87,7 +88,7 @@ def child(client, parent, x=0, y=0, desync=False):
 
 
 def main_window(client, x11, root, rows=None):
-    window, = query_tree(x11, root)
+    window, = input_output_windows(x11, root)
     client.commit()
     client.configure()
     publish(client, client.surface, solid(RED) if rows is None else rows)
@@ -211,7 +212,7 @@ def check_stacking_and_bounds(path, x11, root):
         expected = rectangle(rectangle(solid(RED), BLUE, 1, 1, 4, 4), GREEN, 3, 3, 4, 4)
         wait_image(x11, window, expected)
         assert all(map_state(x11, child_window) == UNMAPPED
-                   for child_window in query_tree(x11, root) - {window})
+                   for child_window in input_output_windows(x11, root) - {window})
         client.send(first_role, ABOVE, struct.pack("=I", second))
         client.sync()
         wait_image(x11, window, expected)

@@ -11,6 +11,7 @@ from native_input import XInput, MOTION, POINTER_ENTER, GET_INPUT_FOCUS, X11_REP
 from native_lifecycle import wait_socket
 from native_outputs import Outputs, SPLIT, CONNECTION, POSITION, DESTROY_SECOND, MODE
 from native_subsurfaces import child, publish, solid, RED, BLUE
+from native_surfaces import input_output_windows
 from native_surfaces import root_window, query_tree, create_surface
 from native_xdg import XdgClient
 
@@ -69,7 +70,7 @@ def check_surfaces(path, display):
     client = OutputSurfaces(path)
     try:
         root = root_window(setup)
-        window, = query_tree(x11, root)
+        window, = input_output_windows(x11, root)
         client.change_outputs(SPLIT)
         first_name, second_name = client.outputs()
         first, _ = client.bind_output(first_name)
@@ -222,7 +223,7 @@ def check_reset(path, display, process):
     x11, setup = connect_x11(display, return_setup=True)
     client = OutputSurfaces(path)
     try:
-        window, = query_tree(x11, root_window(setup))
+        window, = input_output_windows(x11, root_window(setup))
         client.change_outputs(SPLIT)
         for name in client.outputs():
             client.bind_output(name)
