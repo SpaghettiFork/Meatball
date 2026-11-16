@@ -51,10 +51,21 @@ Toplevel move and resize requests validate the seat's active button-press
 serial and transfer the implicit pointer grab to the X11 WM through
 `_NET_WM_MOVERESIZE`.
 
-Present, DRI3 buffers, output globals, popups, clipboard, drag and drop,
-settings, and leases remain to be ported. The next protocol globals after input
-are `wl_output` and `wl_data_device_manager`. Frame callbacks currently use a
-16 ms server-loop timer. Text-input-v3 is deferred.
+Version 4 `wl_output` describes each connected, enabled RandR desktop output.
+It reports geometry, physical size, the current mode and refresh rate, rotation
+and reflection, subpixel order, a stable name, and a description. Output changes
+and disconnects update existing clients. Screens without RandR output data use
+the native X screen geometry. Separate X screens expose separate output globals;
+surface windows currently use the first X screen.
+
+Surfaces receive output enter/leave events as their committed content crosses
+output boundaries. This includes subsurfaces, cursor images and cursor children,
+window movement, minimize/restore, and output layout changes. Binding an output
+after mapping a surface also sends its enter event. Output scale is currently 1.
+
+Present, DRI3 buffers, popups, clipboard, drag and drop, settings, and leases
+remain to be ported. `wl_data_device_manager` is the next protocol addition.
+Frame callbacks currently use a 16 ms server-loop timer. Text-input-v3 is deferred.
 
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
@@ -171,6 +182,13 @@ ARGB cursor images through XFixes. `native-interactive` checks move/resize
 serials, all resize directions, and pointer-grab transfer to a test WM.
 The input checks use `libxkbcommon.so.0` to parse keymaps. XTEST is enabled
 explicitly in the isolated input test servers.
+
+`native-outputs` checks output protocol versions, current modes, all RandR
+rotation/reflection combinations, physical metadata, disconnect/reconnect,
+non-desktop outputs, and multiple X screens. `native-output-surfaces` checks
+membership during movement, minimize/restore, synchronized child commits,
+cursor updates, output binding/removal, and server reset. Multi-screen checks
+use Spaghetti's Xvfb CRTC isolation fix (`85d4e8708`).
 
 The integration checks run on the CPU Xvfb test host. The module also passes
 these checks with address and undefined-behavior sanitizers; leak detection is
