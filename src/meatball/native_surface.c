@@ -342,7 +342,8 @@ apply_input (MbSurface *surface, WindowPtr native)
         input_default = FALSE;
         area = &aggregate;
     }
-    else if (surface->pixels && surface->stack_count > 1)
+    else if (surface->pixels && (surface->stack_count > 1 ||
+                                 surface->scene_x || surface->scene_y))
     {
         MbSceneIterator iterator = { .root = surface, .surface = surface };
         MbSurface *node;
@@ -588,6 +589,7 @@ mb_surface_update (MbSurface *surface)
     MbSurface *node;
     int64_t x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     Bool offset;
+    int32_t anchor_x, anchor_y;
 
     if (!native)
         return TRUE;
@@ -610,13 +612,13 @@ mb_surface_update (MbSurface *surface)
     }
     pixman_box32_t bounds = { x1, y1, x2, y2 };
 
-    if (!mb_xdg_constrain_scene (surface, &bounds))
+    if (!mb_xdg_constrain_scene (surface, &bounds, &anchor_x, &anchor_y))
         goto fail;
     x1 = bounds.x1;
     y1 = bounds.y1;
     x2 = bounds.x2;
     y2 = bounds.y2;
-    offset = surface->offset_x || surface->offset_y ||
+    offset = surface->offset_x || surface->offset_y || anchor_x || anchor_y ||
              surface->scene_x != x1 || surface->scene_y != y1;
     if (!surface->pixels)
     {
@@ -633,10 +635,10 @@ mb_surface_update (MbSurface *surface)
 
         if (offset && surface->role != MB_ROLE_DRAG_ICON)
         {
-            int64_t x = (int64_t)native->origin.x + surface->offset_x + x1 -
-                        surface->scene_x;
-            int64_t y = (int64_t)native->origin.y + surface->offset_y + y1 -
-                        surface->scene_y;
+            int64_t x = (int64_t)native->origin.x - native->borderWidth +
+                        surface->offset_x + x1 - surface->scene_x + anchor_x;
+            int64_t y = (int64_t)native->origin.y - native->borderWidth +
+                        surface->offset_y + y1 - surface->scene_y + anchor_y;
 
             if (x < INT16_MIN || x > INT16_MAX || y < INT16_MIN ||
                 y > INT16_MAX)

@@ -84,7 +84,8 @@ struct MbXdgSurface
     int32_t last_width, last_height;
     int32_t min_width, min_height, max_width, max_height;
     Bool hints_changed;
-    Bool geometry_set, frame_extents_set;
+    Bool geometry_set, frame_extents_set, anchor_set;
+    int32_t anchor_x, anchor_y;
     int32_t geometry_x, geometry_y, geometry_width, geometry_height;
     XID parent;
     XID window_id;
@@ -209,8 +210,8 @@ mb_xdg_refresh_shapes (void)
         if (!surface->xdg)
             continue;
         window = mb_window_get (&surface->window, DixSetAttrAccess);
-        if (window && !apply_bounds (surface, window))
-            wl_resource_post_no_memory (surface->resource);
+        if (window)
+            mb_surface_update (surface);
     }
 }
 
@@ -314,7 +315,7 @@ reset_mapping (struct MbXdgSurface *xdg)
 {
     reparent_children (xdg);
     xdg->initialized = xdg->configured = xdg->map_requested = FALSE;
-    xdg->geometry_set = xdg->frame_extents_set = FALSE;
+    xdg->geometry_set = xdg->frame_extents_set = xdg->anchor_set = FALSE;
     xdg->parent = None;
     memset (xdg->frame_extents, 0, sizeof (xdg->frame_extents));
     if (xdg->surface)
@@ -1087,18 +1088,20 @@ mb_xdg_commit (MbSurface *surface)
 }
 
 Bool
-mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds)
+mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
+                        int32_t *anchor_x, int32_t *anchor_y)
 {
     struct MbXdgSurface *xdg = surface->xdg;
     WindowPtr window;
     PropertyPtr property;
+    Selection *selection;
     Bool horizontal = FALSE, vertical = FALSE, fullscreen = FALSE;
-    const CARD32 *atoms;
-    unsigned int i;
+    Bool constrained;
     pixman_box32_t geometry;
     int result;
 
-    if (!xdg || !xdg->geometry_set)
+    *anchor_x = *anchor_y = 0;
+    if (!xdg || !xdg->geometry_set || !surface->pixels)
         return TRUE;
     window = mb_window_get (&surface->window, DixGetPropAccess);
     if (!window)
@@ -1108,18 +1111,20 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds)
                            surface->client->native, DixReadAccess);
     if (result == BadAlloc)
         return FALSE;
-    if (result != Success || property->type != XA_ATOM ||
-        property->format != MB_PROPERTY_FORMAT_32)
-        return TRUE;
-    atoms = property->data;
-    for (i = 0; i < property->size; i++)
+    if (result == Success && property->type == XA_ATOM &&
+        property->format == MB_PROPERTY_FORMAT_32)
     {
-        horizontal |= atoms[i] == compositor.atoms.net_wm_maximized_horz;
-        vertical |= atoms[i] == compositor.atoms.net_wm_maximized_vert;
-        fullscreen |= atoms[i] == compositor.atoms.net_wm_fullscreen;
+        const CARD32 *atoms = property->data;
+        unsigned int i;
+
+        for (i = 0; i < property->size; i++)
+        {
+            horizontal |= atoms[i] == compositor.atoms.net_wm_maximized_horz;
+            vertical |= atoms[i] == compositor.atoms.net_wm_maximized_vert;
+            fullscreen |= atoms[i] == compositor.atoms.net_wm_fullscreen;
+        }
     }
-    if (!fullscreen && !(horizontal && vertical))
-        return TRUE;
+    constrained = fullscreen || (horizontal && vertical);
     geometry = (pixman_box32_t){
         max (bounds->x1, min (bounds->x2, xdg->geometry_x)),
         max (bounds->y1, min (bounds->y2, xdg->geometry_y)),
@@ -1130,8 +1135,42 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds)
              max ((int64_t)bounds->y1,
                   (int64_t)xdg->geometry_y + xdg->geometry_height)),
     };
-    if (geometry.x1 < geometry.x2 && geometry.y1 < geometry.y2)
-        *bounds = geometry;
+    if (xdg->anchor_set)
+    {
+        *anchor_x = xdg->anchor_x - geometry.x1;
+        *anchor_y = xdg->anchor_y - geometry.y1;
+    }
+    xdg->anchor_x = geometry.x1;
+    xdg->anchor_y = geometry.y1;
+    xdg->anchor_set = TRUE;
+    if (geometry.x1 >= geometry.x2 || geometry.y1 >= geometry.y2)
+        return TRUE;
+    if (!constrained)
+    {
+        MbSceneIterator iterator = { .root = surface, .surface = surface };
+        MbSurface *node;
+
+        result =
+            dixLookupSelection (&selection, xdg->compositor_selection,
+                                surface->client->native, DixGetAttrAccess);
+        if (result == BadAlloc)
+            return FALSE;
+        if (result == Success && selection->window != None)
+            return TRUE;
+        while ((node = mb_scene_next (&iterator)))
+        {
+            if (node == surface)
+                continue;
+            geometry.x1 = min ((int64_t)geometry.x1, iterator.x);
+            geometry.y1 = min ((int64_t)geometry.y1, iterator.y);
+            geometry.x2 = max ((int64_t)geometry.x2, iterator.x + node->width);
+            geometry.y2 =
+                max ((int64_t)geometry.y2, iterator.y + node->height);
+        }
+        if (iterator.failed)
+            return FALSE;
+    }
+    *bounds = geometry;
     return TRUE;
 }
 

@@ -300,9 +300,9 @@ def check_parents_and_geometry(x11, root, path):
         assert property32(x11, first_window, "WM_NORMAL_HINTS", XA_WM_SIZE_HINTS)[0] == 0
         client.commit()
         client.sync()
-        assert property32(x11, first_window, "_GTK_FRAME_EXTENTS", XA_CARDINAL) == (1, 0, 0, 0)
+        assert property32(x11, first_window, "_GTK_FRAME_EXTENTS", XA_CARDINAL) == (0, 0, 0, 0)
         hints = property32(x11, first_window, "WM_NORMAL_HINTS", XA_WM_SIZE_HINTS)
-        assert hints[5:9] == (2, 1, 101, NATIVE_MAX_DIMENSION)
+        assert hints[5:9] == (1, 1, 100, NATIVE_MAX_DIMENSION)
         windows = {first_window}
         roles = [(client.surface, client.xdg, client.top, first_window)]
         for _ in range(2):
