@@ -3,12 +3,13 @@
 import fcntl
 import os
 from pathlib import Path
+import select
 import signal
 import struct
 import sys
 import tempfile
 
-from host_support import connect_x11, server
+from host_support import connect_x11, server, STARTUP_TIMEOUT
 from native_input import (InputClient, XInput, map_window, KEYBOARD_ENTER,
                           KEYBOARD_KEYMAP, KEYBOARD_LEAVE, KEY_PRESS, KEY_RELEASE,
                           KEY_A, KEYCODE_OFFSET, KEYBOARD_KEY)
@@ -139,6 +140,8 @@ def transfer(sender, source, receiver, offer, payload=PAYLOAD):
         os.close(writer)
         writer = None
         while True:
+            readable, _, _ = select.select([reader], [], [], STARTUP_TIMEOUT)
+            assert readable, "transfer pipe remained open"
             data = os.read(reader, LARGE_BYTES)
             if not data:
                 break
@@ -154,6 +157,8 @@ def rejected(receiver, offer, mime=MIME_TEXT):
     reader = receive_pipe(receiver, offer, mime)
     try:
         receiver.sync()
+        readable, _, _ = select.select([reader], [], [], STARTUP_TIMEOUT)
+        assert readable, "rejected transfer pipe remained open"
         assert os.read(reader, 1) == b""
     finally:
         os.close(reader)

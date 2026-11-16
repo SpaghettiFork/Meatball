@@ -2,9 +2,13 @@
 #ifndef MEATBALL_NATIVE_INPUT_H
 #define MEATBALL_NATIVE_INPUT_H
 
+#include "native_data.h"
 #include "native_surface.h"
 
 struct MbInput;
+extern Bool mb_input_begin_drag (uint64_t seat, MbSurface *origin,
+                                 uint32_t serial, MbDragPosition *position);
+extern void mb_input_end_drag (uint64_t seat);
 extern uint64_t mb_input_seat_id (struct wl_resource *resource);
 extern MbClient *mb_input_keyboard_client (uint64_t seat);
 extern Bool mb_input_selection_serial (uint64_t seat, MbClient *client,

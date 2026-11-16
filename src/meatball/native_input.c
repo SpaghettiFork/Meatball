@@ -80,6 +80,9 @@ struct MbSeat
     uint32_t enter_serial, button_serial;
     struct InputSerial serials[INPUT_SERIAL_LIMIT];
     unsigned int serial_index;
+    uint64_t drag_owner;
+    uint32_t drag_enter_serial;
+    ScreenPtr drag_screen;
     unsigned char keys[DOWN_LENGTH], buttons[DOWN_LENGTH];
     unsigned int button_count, grab_button;
     wl_fixed_t pointer_x, pointer_y;
@@ -106,6 +109,10 @@ struct InputEvent
     struct wl_list link;
     enum InputKind kind;
     uint64_t client, seat;
+    uint64_t target_client;
+    XID target_window;
+    int target_screen;
+    Bool drag_event;
     size_t size, charge;
     unsigned char keys[DOWN_LENGTH];
     struct Modifiers modifiers;
@@ -125,6 +132,7 @@ struct MbInput
 
 static uint64_t next_seat_lifetime;
 
+static MbSurface *root_for_window (WindowPtr);
 static void pointer_focus (struct MbSeat *, MbSurface *, wl_fixed_t,
                            wl_fixed_t);
 static void keyboard_focus (struct MbSeat *, MbSurface *,
@@ -156,7 +164,7 @@ find_seat_id (uint64_t id)
         return NULL;
     wl_list_for_each (seat, &compositor.input->seats, link)
     {
-        if (seat->lifetime == id && !seat->removed && !seat->retire_pending)
+        if (seat->lifetime == id)
             return seat;
     }
     return NULL;
@@ -181,7 +189,8 @@ mb_input_keyboard_client (uint64_t id)
 {
     struct MbSeat *seat = find_seat_id (id);
 
-    if (!seat || !seat->keyboard_focus || seat->keyboard_focus->client->failed)
+    if (!seat || seat->removed || seat->retire_pending ||
+        !seat->keyboard_focus || seat->keyboard_focus->client->failed)
         return NULL;
     return seat->keyboard_focus->client;
 }
@@ -289,21 +298,45 @@ update_cursor (struct MbSeat *seat)
     DeviceIntPtr pointer;
     CursorPtr cursor;
 
-    if (!client || !seat->pointer_focus ||
-        seat->pointer_focus->client != client || seat->removed)
+    if (!client || seat->removed)
         return TRUE;
-    root = mb_subsurface_root (seat->pointer_focus);
-    if (!root)
-        return TRUE;
-    window = mb_window_get (&root->window, DixSetAttrAccess);
-    if (!window || dixLookupDevice (&pointer, seat->pointer_id, client->native,
-                                    DixUseAccess) != Success)
+    if (dixLookupDevice (&pointer, seat->pointer_id, client->native,
+                         DixUseAccess) != Success)
         return FALSE;
+    if (seat->drag_owner)
+    {
+        if (seat->drag_owner != client->lifetime ||
+            !pointer->deviceGrab.grab ||
+            CLIENT_ID (pointer->deviceGrab.grab->resource) !=
+                client->native->index)
+            return TRUE;
+        window = pointer->deviceGrab.grab->window;
+    }
+    else
+    {
+        if (!seat->pointer_focus || seat->pointer_focus->client != client)
+            return TRUE;
+        root = mb_subsurface_root (seat->pointer_focus);
+        if (!root)
+            return TRUE;
+        window = mb_window_get (&root->window, DixSetAttrAccess);
+        if (!window)
+            return FALSE;
+    }
     cursor = mb_cursor_create (client, seat->cursor_surface, seat->hotspot_x,
                                seat->hotspot_y);
     if (!cursor)
         return FALSE;
-    if (ChangeWindowDeviceCursor (window, pointer, cursor) != Success)
+    if (seat->drag_owner)
+    {
+        CursorPtr previous = pointer->deviceGrab.grab->cursor;
+
+        pointer->deviceGrab.grab->cursor = RefCursor (cursor);
+        if (previous)
+            FreeCursor (previous, None);
+        WindowHasNewCursor (window);
+    }
+    else if (ChangeWindowDeviceCursor (window, pointer, cursor) != Success)
     {
         FreeResource (cursor->id, RT_NONE);
         return FALSE;
@@ -324,8 +357,15 @@ set_cursor (struct wl_client *client, struct wl_resource *resource,
     MbSurface *surface =
         surface_resource ? wl_resource_get_user_data (surface_resource) : NULL;
 
-    if (!seat->pointer_focus || seat->pointer_focus->client != input->client ||
-        serial != seat->enter_serial)
+    if (seat->drag_owner)
+    {
+        if (seat->drag_owner != input->client->lifetime ||
+            serial != seat->drag_enter_serial)
+            return;
+    }
+    else if (!seat->pointer_focus ||
+             seat->pointer_focus->client != input->client ||
+             serial != seat->enter_serial)
         return;
     if (surface && surface->role != MB_ROLE_NONE &&
         surface->role != MB_ROLE_CURSOR)
@@ -362,12 +402,21 @@ mb_input_cursor_intersects (MbSurface *cursor, ScreenPtr screen,
         MbSurface *root;
         double x, y;
 
-        if (seat->removed || seat->cursor_surface != cursor ||
-            !seat->pointer_focus)
+        if (seat->removed || seat->cursor_surface != cursor)
             continue;
-        root = mb_subsurface_root (seat->pointer_focus);
-        if (!root || root->window.screen != screen)
-            continue;
+        if (seat->drag_owner)
+        {
+            if (seat->drag_screen != screen)
+                continue;
+        }
+        else
+        {
+            root = seat->pointer_focus
+                       ? mb_subsurface_root (seat->pointer_focus)
+                       : NULL;
+            if (!root || root->window.screen != screen)
+                continue;
+        }
         x = seat->root_pointer_x - seat->hotspot_x + screen->x;
         y = seat->root_pointer_y - seat->hotspot_y + screen->y;
         if (x + node->x1 < output->x2 && x + node->x2 > output->x1 &&
@@ -387,8 +436,9 @@ mb_input_cursor_visible (MbSurface *surface)
     wl_list_for_each (seat, &compositor.input->seats, link)
     {
         if (!seat->removed && seat->cursor_surface == surface &&
-            seat->pointer_focus &&
-            seat->pointer_focus->client == surface->client)
+            (seat->drag_owner == surface->client->lifetime ||
+             (seat->pointer_focus &&
+              seat->pointer_focus->client == surface->client)))
             return TRUE;
     }
     return FALSE;
@@ -618,7 +668,12 @@ pointer_focus (struct MbSeat *seat, MbSurface *surface, wl_fixed_t x,
     }
     seat->pointer_focus = surface;
     seat->enter_serial = serial;
-    if (!surface || surface->client->lifetime != seat->cursor_owner)
+    if (seat->drag_owner)
+    {
+        if (!update_cursor (seat) && seat->cursor_surface)
+            wl_resource_post_no_memory (seat->cursor_surface->resource);
+    }
+    else if (!surface || surface->client->lifetime != seat->cursor_owner)
         clear_cursor (seat);
     else if (!update_cursor (seat))
         wl_resource_post_no_memory (surface->resource);
@@ -905,6 +960,23 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
     if (!event)
         return;
     memcpy (event->data, generic, size);
+    if (seat->drag_owner == client->lifetime &&
+        generic->evtype >= XI_ButtonPress && generic->evtype <= XI_Motion)
+    {
+        DeviceIntPtr pointer;
+
+        if (dixLookupDevice (&pointer, seat->pointer_id, client->native,
+                             DixGetAttrAccess) == Success)
+        {
+            MbSurface *root = root_for_window (GetSpriteWindow (pointer));
+
+            event->drag_event = TRUE;
+            event->target_client = root ? root->client->lifetime : 0;
+            event->target_window = root ? root->window.id : None;
+            event->target_screen =
+                pointer->spriteInfo->sprite->hotPhys.pScreen->myNum;
+        }
+    }
     if (generic->evtype == XI_FocusIn)
     {
         DeviceIntPtr keyboard;
@@ -953,8 +1025,9 @@ root_for_window (WindowPtr window)
         wl_list_for_each (surface, &compositor.surfaces, link)
         {
             if (surface->window.id == window->drawable.id &&
-                window->realized && surface->pixels &&
-                mb_subsurface_root (surface) == surface)
+                surface->role != MB_ROLE_DRAG_ICON &&
+                surface->role != MB_ROLE_CURSOR && window->realized &&
+                surface->pixels && mb_subsurface_root (surface) == surface)
                 return surface;
         }
         window = window->parent;
@@ -1108,6 +1181,104 @@ hit_surface (MbSurface *root, double x, double y, MbSurface *grab,
     return hit;
 }
 
+static MbDragPosition
+drag_position (MbSurface *root, ScreenPtr screen, double x, double y,
+               uint32_t time)
+{
+    MbDragPosition position = {
+        .screen = screen, .root_x = x, .root_y = y, .time = time
+    };
+    WindowPtr window =
+        root ? mb_window_get (&root->window, DixGetAttrAccess) : NULL;
+
+    if (window && window->realized && root->pixels)
+        position.surface =
+            hit_surface (root, x - window->drawable.x + root->scene_x,
+                         y - window->drawable.y + root->scene_y, NULL,
+                         &position.x, &position.y);
+    return position;
+}
+
+Bool
+mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
+                     MbDragPosition *position)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    DeviceIntPtr pointer;
+    GrabPtr grab;
+    unsigned char events[XIMaskLen (XI_LASTEVENT)] = { 0 };
+    unsigned char empty[sizeof (events)] = { 0 };
+    unsigned char *masks[XIAllMasterDevices + 1] = { [XIAllDevices] = empty,
+                                                     [XIAllMasterDevices] =
+                                                         events };
+    XI2Mask xi2mask = { .masks = masks,
+                        .nmasks = ARRAY_SIZE (masks),
+                        .mask_size = sizeof (events) };
+    GrabMask mask = { .xi2mask = &xi2mask };
+    CARD8 status;
+    MbSurface *root;
+
+    if (!seat || seat->removed || seat->retire_pending || seat->drag_owner ||
+        seat->grab_focus != origin || !seat->button_count ||
+        serial != seat->button_serial ||
+        dixLookupDevice (&pointer, seat->pointer_id, origin->client->native,
+                         DixGrabAccess) != Success)
+        return FALSE;
+    grab = pointer->deviceGrab.grab;
+    if (!grab || !pointer->deviceGrab.implicitGrab || grab->grabtype != XI2 ||
+        CLIENT_ID (grab->resource) != origin->client->native->index)
+        return FALSE;
+    seat->drag_screen = pointer->spriteInfo->sprite->hotPhys.pScreen;
+    XISetMask (events, XI_ButtonPress);
+    XISetMask (events, XI_ButtonRelease);
+    XISetMask (events, XI_Motion);
+    if (GrabDevice (origin->client->native, pointer, GrabModeAsync,
+                    GrabModeAsync, seat->drag_screen->root->drawable.id, FALSE,
+                    CurrentTime, &mask, XI2, None, None, &status) != Success ||
+        status != GrabSuccess)
+        return FALSE;
+    if (!pointer->button || !pointer->button->buttonsDown)
+    {
+        pointer->deviceGrab.DeactivateGrab (pointer);
+        return FALSE;
+    }
+    seat->drag_owner = origin->client->lifetime;
+    seat->drag_enter_serial = seat->enter_serial;
+    seat->root_pointer_x = pointer->spriteInfo->sprite->hot.x;
+    seat->root_pointer_y = pointer->spriteInfo->sprite->hot.y;
+    pointer_focus (seat, NULL, 0, 0);
+    seat->pointer_root = NULL;
+    root = root_for_window (GetSpriteWindow (pointer));
+    *position = drag_position (root, seat->drag_screen, seat->root_pointer_x,
+                               seat->root_pointer_y, GetTimeInMillis ());
+    return TRUE;
+}
+
+void
+mb_input_end_drag (uint64_t id)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    MbClient *client;
+    DeviceIntPtr pointer;
+
+    if (!seat || !seat->drag_owner)
+        return;
+    client = mb_client_lookup (seat->drag_owner);
+    seat->drag_owner = 0;
+    if (client &&
+        dixLookupDevice (&pointer, seat->pointer_id, client->native,
+                         DixGrabAccess) == Success &&
+        pointer->deviceGrab.grab &&
+        CLIENT_ID (pointer->deviceGrab.grab->resource) ==
+            client->native->index)
+        pointer->deviceGrab.DeactivateGrab (pointer);
+    seat->drag_screen = NULL;
+    seat->grab_focus = NULL;
+    seat->button_count = 0;
+    memset (seat->buttons, 0, sizeof (seat->buttons));
+    clear_cursor (seat);
+}
+
 static void
 pointer_motion (struct MbSeat *seat, MbSurface *root, double x, double y,
                 uint32_t time, Bool motion)
@@ -1229,6 +1400,11 @@ keyboard_key (struct MbSeat *seat, const xXIDeviceEvent *event)
     Bool pressed = event->evtype == XI_KeyPress;
     uint32_t serial;
 
+    if (seat->drag_owner && key == KEY_ESC + XORG_KEYCODE_OFFSET && pressed)
+    {
+        mb_data_drag_cancel (seat->lifetime);
+        return;
+    }
     if (!seat->keyboard_focus || key < XORG_KEYCODE_OFFSET ||
         key >= KEYCODE_COUNT || (event->flags & XIKeyRepeat))
         return;
@@ -1311,6 +1487,46 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
     {
         const xXIDeviceEvent *event = (const void *)generic;
 
+        if (seat->drag_owner && event->evtype >= XI_ButtonPress &&
+            event->evtype <= XI_Motion)
+        {
+            MbDragPosition position;
+            unsigned int detail = event->detail;
+
+            if (!queued->drag_event || queued->client != seat->drag_owner)
+                return;
+            root =
+                window_surface (queued->target_client, queued->target_window);
+            seat->root_pointer_x = (double)event->root_x / FIXED_16_ONE;
+            seat->root_pointer_y = (double)event->root_y / FIXED_16_ONE;
+            if (queued->target_screen >= 0 &&
+                queued->target_screen < screenInfo.numScreens)
+                seat->drag_screen = screenInfo.screens[queued->target_screen];
+            position =
+                drag_position (root, seat->drag_screen, seat->root_pointer_x,
+                               seat->root_pointer_y, event->time);
+            mb_data_drag_motion (seat->lifetime, &position);
+            if (!seat->drag_owner || event->evtype == XI_Motion || !detail ||
+                detail >= KEYCODE_COUNT ||
+                (detail >= X11_SCROLL_UP && detail <= X11_SCROLL_RIGHT))
+                return;
+            if (event->evtype == XI_ButtonPress &&
+                !BitIsOn (seat->buttons, detail))
+            {
+                SetBit (seat->buttons, detail);
+                seat->button_count++;
+            }
+            else if (event->evtype == XI_ButtonRelease &&
+                     BitIsOn (seat->buttons, detail))
+            {
+                ClearBit (seat->buttons, detail);
+                if (seat->button_count)
+                    seat->button_count--;
+                if (!seat->button_count)
+                    mb_data_drag_drop (seat->lifetime);
+            }
+            return;
+        }
         root = window_surface (queued->client, event->event);
         if (!root)
             return;
@@ -1414,6 +1630,34 @@ mb_input_dispatch (void)
 
         if (seat->removed)
             continue;
+        if (seat->drag_owner)
+        {
+            MbClient *owner = mb_client_lookup (seat->drag_owner);
+            DeviceIntPtr pointer;
+
+            if (!owner ||
+                dixLookupDevice (&pointer, seat->pointer_id, owner->native,
+                                 DixGetAttrAccess) != Success ||
+                !pointer->deviceGrab.grab ||
+                CLIENT_ID (pointer->deviceGrab.grab->resource) !=
+                    owner->native->index)
+                mb_data_drag_cancel (seat->lifetime);
+            else
+            {
+                MbDragPosition position;
+
+                root = root_for_window (GetSpriteWindow (pointer));
+                seat->drag_screen =
+                    pointer->spriteInfo->sprite->hotPhys.pScreen;
+                seat->root_pointer_x = pointer->spriteInfo->sprite->hot.x;
+                seat->root_pointer_y = pointer->spriteInfo->sprite->hot.y;
+                position = drag_position (
+                    root, seat->drag_screen, seat->root_pointer_x,
+                    seat->root_pointer_y, GetTimeInMillis ());
+                mb_data_drag_motion (seat->lifetime, &position);
+            }
+            root = NULL;
+        }
         if (root)
         {
             window = mb_window_get (&root->window, DixGetAttrAccess);

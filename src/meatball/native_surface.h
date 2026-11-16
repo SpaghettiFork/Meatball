@@ -19,6 +19,7 @@ typedef enum
     MB_ROLE_XDG,
     MB_ROLE_SUBSURFACE,
     MB_ROLE_CURSOR,
+    MB_ROLE_DRAG_ICON,
 } MbSurfaceRole;
 
 typedef struct

@@ -2,6 +2,7 @@
 
 #include <xorg-server.h>
 
+#include <dix.h>
 #include <dixstruct.h>
 #include <dri3.h>
 #include <exevents.h>
@@ -44,6 +45,11 @@ __attribute__ ((
 __attribute__ ((used)) static DevPrivateKey output_private_key = &rrPrivKeyRec;
 __attribute__ ((used)) static __typeof__ (&RRCrtcGetScanoutSize) output_size =
     RRCrtcGetScanoutSize;
+
+__attribute__ ((used)) static __typeof__ (&GrabDevice) grab_device =
+    GrabDevice;
+__attribute__ ((used)) static __typeof__ (&WindowHasNewCursor) update_cursor =
+    WindowHasNewCursor;
 
 static MODULESETUPPROTO (probe_setup);
 

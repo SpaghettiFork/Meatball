@@ -52,6 +52,9 @@ if spaghetti_build_dir != ''
     test('native-data', python,
          args: ['-B', files('native_data.py'), test_host, sauce],
          timeout: 60)
+    test('native-drag', python,
+         args: ['-B', files('native_drag.py'), test_host, sauce],
+         timeout: 60)
     test('native-loop', python,
          args: ['-B', files('native_loop.py'), test_host, sauce],
          timeout: 30)
