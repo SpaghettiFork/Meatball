@@ -11,7 +11,7 @@ from native_constraints import (ACTIVATED, CONFINE, DESTROY, LOCK, PERSISTENT,
                                 INTERFACE as CONSTRAINTS, constraint, move,
                                 pointer_position, wait_no_windows)
 from native_input import (BUTTON_PRESS, BUTTON_RELEASE, FIXED_ONE, MOTION,
-                          PEER_WINDOW_ORIGIN, POINTER_AXIS, POINTER_ENTER,
+                          PEER_WINDOW_ORIGIN, POINTER_AXIS, POINTER_ENTER, POINTER_FRAME,
                           POINTER_LEAVE, POINTER_MOTION, WINDOW_ORIGIN,
                           WINDOW_SIZE, X11_REPLY_SIZE, InputClient, XInput,
                           map_window)
@@ -149,9 +149,19 @@ def check_focus_and_grabs(path, actor, root, client, first, display):
         client.sync()
         before = pointer_position(actor)
         motion(actor, -20, 30)
+        motion(actor, 4, -3)
         later, events = read_motion(client, relative, -20, 30)
         assert later >= timestamp
-        events += client.roundtrip_events()
+        latest, following = read_motion(client, relative, 4, -3)
+        assert latest >= later
+        first_frame = [event[:2] for event in following
+                       if event[0] in (client.pointer, relative)]
+        assert first_frame == [(client.pointer, POINTER_FRAME),
+                               (relative, RELATIVE_MOTION)], first_frame
+        tail = client.roundtrip_events()
+        assert [event[:2] for event in tail if event[0] == client.pointer] == [
+            (client.pointer, POINTER_FRAME)]
+        events += following + tail
         assert not any(event[:2] == (client.pointer, POINTER_MOTION) for event in events)
         assert pointer_position(actor) == before
         client.send(locked, DESTROY)

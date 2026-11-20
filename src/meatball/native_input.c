@@ -2455,6 +2455,7 @@ dispatch_relative_motion (struct MbSeat *seat, struct InputEvent *event)
     MbSurface *root;
     struct InputResource *input;
     struct RelativeMotion relative;
+    Bool sent = FALSE;
 
     if (!focus || focus->client->failed || seat->drag_owner ||
         seat->retire_pending)
@@ -2481,6 +2482,16 @@ dispatch_relative_motion (struct MbSeat *seat, struct InputEvent *event)
             input->resource, (uint32_t)(relative.time >> 32),
             (uint32_t)relative.time, relative.dx, relative.dy,
             relative.dx_unaccel, relative.dy_unaccel);
+        sent = TRUE;
+    }
+    if (!sent)
+        return;
+
+    /* Relative motion forms a pointer frame even during an absolute lock. */
+    wl_list_for_each (input, &seat->resources, link)
+    {
+        if (input->kind == RESOURCE_POINTER && input->client == focus->client)
+            send_pointer_frame (input);
     }
 }
 

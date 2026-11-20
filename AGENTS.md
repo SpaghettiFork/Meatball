@@ -297,8 +297,10 @@ unaccelerated Xorg motion deltas to the pointer-focused client. Deltas are
 captured before cursor clipping, including during locks and confinement.
 Absolute device motion, cursor warps, scrolling, and motion under a foreign
 X11 grab produce no relative events. Relative pointers follow their seat's
-focus and become inert when it is removed. Timestamps express Xorg's
-millisecond event clock in microseconds.
+focus and become inert when it is removed. Each relative sample ends with
+`wl_pointer.frame` on supported pointer bindings, including while a lock
+suppresses absolute motion. Timestamps express Xorg's millisecond event
+clock in microseconds.
 
 ### Outputs
 
@@ -442,7 +444,8 @@ Every check runs against the isolated module test host.
   subsurface commits, focus and lifetime rules, duplicate requests, window
   manager handoff, and disconnect cleanup.
 - `native-relative-pointer` checks processed and raw delta delivery during
-  normal motion, locks, and confinement. It also covers absolute motion,
+  normal motion, locks, and confinement, and motion-only pointer frames
+  during a lock. It also covers absolute motion,
   scroll and foreign-grab filtering, client and seat isolation, resource
   lifetime, and master-device removal.
 - `native-cursor` reads back ARGB cursor images through XFixes.
