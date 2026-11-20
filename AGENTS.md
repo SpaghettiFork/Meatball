@@ -205,6 +205,9 @@ desktops. Maximized and fullscreen canvases follow the committed window
 geometry, keeping transient status subsurfaces from changing the window size.
 On noncomposited desktops, subsurfaces with an explicitly empty input region
 that overlap the window geometry paint without expanding the windowed canvas.
+ARGB subsurfaces that extend beyond all four sides of the content also paint
+without expanding the canvas. This clips libdecor's shadow and its outer resize
+region while keeping the title bar inside the declared window geometry.
 Window geometry changes preserve the visible window's position. Geometry and
 configure acknowledgements apply with their corresponding surface commits.
 Replies to older configures preserve the WM's latest native size until the

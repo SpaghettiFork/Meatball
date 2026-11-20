@@ -11,6 +11,7 @@ import time
 from host_support import connect_x11, server, STARTUP_TIMEOUT
 from native_clients import intern_atom, property32, XA_CARDINAL
 from native_lifecycle import wait_socket, POLL_INTERVAL
+from native_subsurfaces import ABOVE, POSITION, child, publish, rectangle, solid
 from native_surfaces import root_window, query_tree, shape_rectangles, SHAPE_BOUNDING
 from native_transforms import (attach_rows, image, transformed, SURFACE_SCALE,
                                SURFACE_TRANSFORM, dimensions)
@@ -42,6 +43,9 @@ HINT_RESIZE_INC = 1 << 6
 HINT_BASE_SIZE = 1 << 8
 HINT_INCREMENTS = slice(9, 11)
 HINT_BASE = slice(15, 17)
+FRAME_MARGIN = 2
+TITLE_HEIGHT = 3
+TITLE_COLOR = 0xff304050
 
 
 def wait_shape(x11, window, expected):
@@ -195,6 +199,55 @@ def check_shadows(path, display, x11, root, scale=1, transform=0, composited=Fal
         client.close()
 
 
+def check_shadow_subsurface(path, display, x11, root):
+    before = query_tree(x11, root)
+    client = XdgClient(path)
+    manager, setup = connect_x11(display, return_setup=True)
+    try:
+        window, = query_tree(x11, root) - before
+        owner = manager_window(manager, setup, root)
+        selection = intern_atom(manager, "_NET_WM_CM_S0")
+        client.subcompositor = client.bind("wl_subcompositor")
+        client.commit()
+        client.configure()
+        shadow, shadow_role = child(client, client.surface, -FRAME_MARGIN, -FRAME_MARGIN)
+        title, title_role = child(client, client.surface, 0, -TITLE_HEIGHT)
+        client.send(title_role, ABOVE, struct.pack("=I", shadow))
+        outer_width = WIDTH + 2 * FRAME_MARGIN
+        outer_height = HEIGHT + 2 * FRAME_MARGIN
+        publish(client, shadow, rectangle(solid(SHADOW, outer_width, outer_height),
+                                          TRANSPARENT, FRAME_MARGIN, FRAME_MARGIN,
+                                          WIDTH, HEIGHT))
+        publish(client, title, solid(TITLE_COLOR, WIDTH, TITLE_HEIGHT))
+        client.send(client.xdg, XDG_GEOMETRY, struct.pack(
+            "=iiii", 0, -TITLE_HEIGHT, WIDTH, HEIGHT + TITLE_HEIGHT))
+        publish(client, client.surface, solid(WINDOW_COLOR, WIDTH, HEIGHT))
+        assert dimensions(x11, window) == (WIDTH, HEIGHT + TITLE_HEIGHT)
+        expected = ((TITLE_COLOR,) * (WIDTH * TITLE_HEIGHT)
+                    + (WINDOW_COLOR,) * (WIDTH * HEIGHT))
+        assert image(x11, window, WIDTH, HEIGHT + TITLE_HEIGHT) == expected
+
+        # libdecor extends the shadow around the title on a repaint.
+        client.send(shadow_role, POSITION, struct.pack(
+            "=ii", -FRAME_MARGIN, -FRAME_MARGIN - TITLE_HEIGHT))
+        publish(client, shadow, rectangle(
+            solid(SHADOW, outer_width, outer_height + TITLE_HEIGHT), TRANSPARENT,
+            FRAME_MARGIN, FRAME_MARGIN + TITLE_HEIGHT, WIDTH, HEIGHT))
+        client.commit()
+        client.sync()
+        assert dimensions(x11, window) == (WIDTH, HEIGHT + TITLE_HEIGHT)
+
+        set_compositor(manager, owner, selection)
+        wait_shape(x11, window, [(0, 0, outer_width, outer_height + TITLE_HEIGHT)])
+        assert image(x11, window, 1, 1)[0] == SHADOW
+        set_compositor(manager, 0, selection)
+        wait_shape(x11, window, [(0, 0, WIDTH, HEIGHT + TITLE_HEIGHT)])
+        assert image(x11, window, WIDTH, HEIGHT + TITLE_HEIGHT) == expected
+    finally:
+        manager.close()
+        client.close()
+
+
 def main():
     host, module = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="meatball-shadows-") as directory:
@@ -209,6 +262,7 @@ def main():
                 x11.sendall(struct.pack("<BBHIhhHH", CLEAR_AREA, 0, 4, root, 0, 0, 0, 0))
                 check_shadows(path, display, x11, root)
                 check_shadows(path, display, x11, root, scale=2, transform=1, composited=True)
+                check_shadow_subsurface(path, display, x11, root)
                 client = XdgClient(path)
                 client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", 1, 1, 1, 1))
                 client.commit()
