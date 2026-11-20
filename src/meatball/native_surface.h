@@ -67,6 +67,7 @@ typedef struct MbSurfaceCommit
     int32_t width, height, scale, transform;
     int32_t offset_x, offset_y;
     Bool synchronized;
+    Bool tearing_async;
     MbPlacement *stack;
     size_t stack_count;
 } MbSurfaceCommit;
@@ -84,6 +85,8 @@ struct MbSurface
     size_t stack_count;
     struct MbXdgSurface *xdg;
     struct MbViewport *viewport;
+    struct wl_resource *tearing_control;
+    Bool tearing_async, pending_tearing_async;
     MbViewportState crop, pending_crop;
     MbWindow window;
     struct wl_list pending_frames, constraints;

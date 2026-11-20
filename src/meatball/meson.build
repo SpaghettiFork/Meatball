@@ -52,6 +52,14 @@ relative_pointer_code = custom_target('native-relative-pointer-code',
                                     input: relative_pointer_xml, output: 'relative-pointer.c',
                                     command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+tearing_control_xml = 'wayland-proto/tearing-control-v1.xml'
+tearing_control_header = custom_target('native-tearing-control-header',
+                                      input: tearing_control_xml, output: 'tearing-control.h',
+                                      command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+tearing_control_code = custom_target('native-tearing-control-code',
+                                    input: tearing_control_xml, output: 'tearing-control.c',
+                                    command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -86,6 +94,8 @@ srcs_meatball = [
     constraints_code,
     relative_pointer_header,
     relative_pointer_code,
+    tearing_control_header,
+    tearing_control_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')
