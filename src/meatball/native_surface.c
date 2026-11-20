@@ -66,6 +66,7 @@ mb_surface_commit_free (MbSurfaceCommit *commit)
     content_unref (commit->surface, commit->content);
     mb_subsurface_commit_free (commit);
     mb_xdg_commit_free (commit);
+    mb_input_free_constraints (commit);
     pixman_region32_fini (&commit->input);
     if (!wl_list_empty (&commit->link))
         commit->surface->commit_count--;
@@ -628,6 +629,7 @@ capture_commit (MbSurface *surface)
     wl_list_init (&commit->dependency_link);
     wl_list_init (&commit->dependencies);
     wl_list_init (&commit->frames);
+    wl_list_init (&commit->constraints);
     pixman_region32_init (&commit->input);
     mb_xdg_capture (commit);
     if (surface->input_changed)
@@ -643,7 +645,8 @@ capture_commit (MbSurface *surface)
     commit->transform = surface->pending_transform;
     commit->width = width;
     commit->height = height;
-    if (!mb_subsurface_capture (commit))
+    if (!mb_input_capture_constraints (commit) ||
+        !mb_subsurface_capture (commit))
         goto fail;
     if (surface->attach_pending)
     {
@@ -701,6 +704,7 @@ mb_surface_commit_apply (MbSurfaceCommit *commit)
 
     mb_subsurface_apply (commit);
     mb_xdg_apply (commit);
+    mb_input_apply_constraints (commit);
     content_unref (surface, surface->content);
     surface->content = commit->content;
     commit->content = NULL;
@@ -887,6 +891,7 @@ create_surface (struct wl_client *client, struct wl_resource *resource,
     surface->scale = surface->pending_scale = 1;
     surface->input_default = surface->pending_input_default = TRUE;
     wl_list_init (&surface->pending_frames);
+    wl_list_init (&surface->constraints);
     wl_list_init (&surface->frames);
     wl_list_init (&surface->commits);
     wl_list_init (&surface->pending_stack);

@@ -36,6 +36,14 @@ dmabuf_code = custom_target('native-dmabuf-code',
                             input: dmabuf_xml, output: 'linux-dmabuf.c',
                             command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+constraints_xml = 'wayland-proto/pointer-constraints-unstable-v1.xml'
+constraints_header = custom_target('native-constraints-header',
+                                   input: constraints_xml, output: 'pointer-constraints.h',
+                                   command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+constraints_code = custom_target('native-constraints-code',
+                                 input: constraints_xml, output: 'pointer-constraints.c',
+                                 command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -66,6 +74,8 @@ srcs_meatball = [
     primary_code,
     dmabuf_header,
     dmabuf_code,
+    constraints_header,
+    constraints_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

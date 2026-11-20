@@ -42,6 +42,9 @@ extern Bool mb_input_cursor_intersects (MbSurface *cursor, ScreenPtr screen,
                                         const pixman_box32_t *output);
 extern Bool mb_input_cursor_visible (MbSurface *surface);
 extern Bool mb_input_cursor_changed (MbSurface *surface);
+extern Bool mb_input_capture_constraints (MbSurfaceCommit *commit);
+extern void mb_input_apply_constraints (MbSurfaceCommit *commit);
+extern void mb_input_free_constraints (MbSurfaceCommit *commit);
 extern void mb_input_surface_destroyed (MbSurface *surface);
 
 #endif
