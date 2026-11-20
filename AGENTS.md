@@ -46,8 +46,8 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 ```
 
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
-The build scans xdg-shell, viewporter, primary-selection-unstable-v1, and
-linux-dmabuf.
+The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
+linux-dmabuf, and pointer-constraints-unstable-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -277,6 +277,18 @@ Toplevel move and resize requests validate the seat's active button-press
 serial and transfer the implicit pointer grab to the X11 WM through
 `_NET_WM_MOVERESIZE`.
 
+Version 1 `zwp_pointer_constraints_v1` supports locking and confinement,
+including one-shot and persistent lifetimes. A constraint activates when
+its surface has pointer focus within the effective region and the native
+window has seat keyboard focus. Input-only X11 windows constrain the native
+cursor through XI2 grabs. Constraint regions intersect the committed surface
+input region and take effect with the corresponding surface commit, including
+synchronized subsurface commits. Locked pointers suppress absolute motion and
+continue delivering buttons and scroll events. Cursor-position hints are
+accepted. Unlocking keeps the current cursor position. Constraints release
+on focus loss, unmap, or device retirement and yield to native menu, drag,
+and move or resize grabs.
+
 ### Outputs
 
 Version 4 `wl_output` describes each connected, enabled RandR desktop output.
@@ -346,10 +358,13 @@ Xdnd versions 1 and 2 are not implemented.
 ## Still to port
 
 - Additional DMA-BUF formats.
-- Settings.
+- Follow the X11 desktop's integer scale via XSETTINGS (`Gdk/WindowScalingFactor`).
 - Leases.
 - Text-input-v3 is deferred.
 - Server-side decoration negotiation.
+- `relative-pointer-unstable-v1`.
+- `xdg-system-bell-v1`.
+- `tearing-control-v1`.
 
 ## Test inventory
 
@@ -411,6 +426,10 @@ Every check runs against the isolated module test host.
 - `native-input` injects XTEST pointer and keyboard events, exercises focus and
   implicit grabs, and checks modifiers, repeat controls, client isolation,
   subsurface destruction, and master-device hotplug.
+- `native-constraints` checks X11 cursor positions, lock motion suppression,
+  button delivery, nonrectangular and double-buffered regions, synchronized
+  subsurface commits, focus and lifetime rules, duplicate requests, window
+  manager handoff, and disconnect cleanup.
 - `native-cursor` reads back ARGB cursor images through XFixes.
 - `native-interactive` checks move/resize serials, all resize directions, and
   pointer-grab transfer to a test WM.
