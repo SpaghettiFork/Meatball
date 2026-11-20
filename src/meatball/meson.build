@@ -28,6 +28,14 @@ primary_code = custom_target('native-primary-code',
                              input: primary_xml, output: 'primary-selection.c',
                              command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+dmabuf_xml = 'wayland-proto/linux-dmabuf-unstable-v1.xml'
+dmabuf_header = custom_target('native-dmabuf-header',
+                              input: dmabuf_xml, output: 'linux-dmabuf.h',
+                              command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+dmabuf_code = custom_target('native-dmabuf-code',
+                            input: dmabuf_xml, output: 'linux-dmabuf.c',
+                            command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -45,6 +53,7 @@ srcs_meatball = [
     'native_surface.c',
     'native_subsurface.c',
     'native_buffer.c',
+    'native_dmabuf.c',
     'native_shm.c',
     'native_render.c',
     'native_xdg.c',
@@ -55,6 +64,8 @@ srcs_meatball = [
     viewport_code,
     primary_header,
     primary_code,
+    dmabuf_header,
+    dmabuf_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

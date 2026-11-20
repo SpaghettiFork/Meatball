@@ -9,6 +9,7 @@
 #include "native_client.h"
 #include "native_cursor.h"
 #include "native_data.h"
+#include "native_dmabuf.h"
 #include "native_input.h"
 #include "native_keymap.h"
 #include "native_output.h"
@@ -41,6 +42,7 @@ typedef struct
     struct MbInput *input;
     struct MbOutputs *outputs;
     struct MbData *data;
+    struct MbDmabuf *dmabuf;
     struct MbSelections *selections;
     struct MbXdnd *xdnd;
     struct wl_listener client_created;

@@ -37,6 +37,8 @@ native_shm.c/.h           SHM buffer import
 native_subsurface.c/.h    subsurface tree and stacking
 native_surface.c/.h       surfaces, roles, input regions
 native_viewport.c/.h      viewport cropping and destination sizing
+native_buffer.c/.h        shared Wayland buffer ownership and pixmap snapshots
+native_dmabuf.c/.h        Linux DMA-BUF imports through DRI3
 native_window.c/.h        native client windows
 native_xdg.c/.h           xdg-shell toplevels
 build_version.h.in        revision stamp template
@@ -44,7 +46,8 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 ```
 
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
-The build scans xdg-shell, viewporter, and primary-selection-unstable-v1.
+The build scans xdg-shell, viewporter, primary-selection-unstable-v1, and
+linux-dmabuf.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -167,6 +170,14 @@ limited to 32767 in each direction.
 
 Version 1 `wp_viewporter` supports cropping and destination sizing, including
 fractional source rectangles.
+
+Version 3 of `zwp_linux_dmabuf_v1` is available when the first X screen reports
+DRI3 modifiers for XRGB8888 or ARGB8888. Meatball advertises those format and
+modifier pairs and uses DRI3 to import the planes for both buffer creation
+requests. Progressive buffers support Y inversion. Commits take a CPU
+readback into a server-owned pixmap before releasing the client buffer, so
+the client can reuse its storage while the window retains its pixels.
+The current version does not provide device feedback or zero-copy rendering.
 
 ### Toplevels
 
@@ -297,7 +308,7 @@ Xdnd versions 1 and 2 are not implemented.
 
 ## Still to port
 
-- DRI3 buffers.
+- DMA-BUF device feedback and additional formats.
 - Popups.
 - Settings.
 - Leases.
@@ -325,6 +336,10 @@ Every check runs against the isolated module test host.
   callbacks, destruction, and reset cleanup.
 - `native-shm` checks imports, wide strides, buffer release, pixel readback, and
   redraws after the client reuses its storage.
+- `native-dmabuf` checks modifier advertisements, both buffer creation
+  requests, rejected parameters, buffer release and reuse, Y inversion, and
+  the absence of the global without DRI3. A test-only Xvfb DRI3 driver imports
+  guarded memory-backed pixmaps, so this check does not require a GPU.
 - `native-shm-fault` truncates an imported file during rendering to exercise
   Spaghetti's SIGBUS handling.
 - `native-xdg` checks mapped pixel content, a test X11 window manager, configure
