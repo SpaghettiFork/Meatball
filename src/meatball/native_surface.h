@@ -106,7 +106,10 @@ struct MbSurface
     int32_t scene_x, scene_y;
     int64_t native_dx, native_dy;
     struct wl_event_source *frame_timer;
-    Bool frame_timer_armed;
+    XID present_event;
+    CARD32 frame_serial;
+    int present_opcode;
+    Bool present_pending, present_disabled;
 };
 
 extern PicturePtr mb_scene_picture (MbSurface *surface);
