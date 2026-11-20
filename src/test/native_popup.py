@@ -4,16 +4,22 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import time
 
-from host_support import connect_x11, receive_exact, server
-from native_input import XInput
-from native_lifecycle import wait_socket
+from host_support import STARTUP_TIMEOUT, connect_x11, receive_exact, server
+from native_input import (BUTTON_PRESS, BUTTON_RELEASE, KEY_A, KEY_PRESS,
+                          KEY_RELEASE, KEYBOARD_ENTER, KEYBOARD_KEY,
+                          KEYCODE_OFFSET, MOTION, POINTER_BUTTON, POINTER_ENTER,
+                          InputClient, XInput)
+from native_interactive import UNGRAB_POINTER, wm_grab
+from native_lifecycle import POLL_INTERVAL, wait_socket
 from native_subsurfaces import (CONFIGURE_WINDOW, CW_POSITION, GET_GEOMETRY,
                                 X11_REPLY_SIZE, publish, solid)
 from native_surfaces import create_surface, input_output_windows, query_tree, root_window
 from native_transforms import image
 from native_xdg import (CONFIGURE_EVENT, UNMAPPED, VIEWABLE, XDG_ACK_CONFIGURE,
                         XDG_GEOMETRY, XDG_GET_SURFACE, XdgClient, map_state)
+from wayland_support import WaylandProtocolError
 
 CREATE_POSITIONER = 1
 POSITIONER_DESTROY = 0
@@ -25,7 +31,9 @@ SET_ADJUSTMENT = 5
 SET_OFFSET = 6
 GET_POPUP = 2
 POPUP_DESTROY = 0
+POPUP_GRAB = 1
 POPUP_DONE = 1
+ESCAPE = 1 + KEYCODE_OFFSET
 BOTTOM_RIGHT = 8
 FLIP_X = 4
 SLIDE_Y = 2
@@ -146,6 +154,154 @@ def check_popup(path, actor, root):
         client.close()
 
 
+def start_grab(client, popup, serial):
+    client.send(popup, POPUP_GRAB, struct.pack("=II", client.seat, serial))
+
+
+def focused(events, keyboard, surface):
+    return any(resource == keyboard and opcode == KEYBOARD_ENTER
+               and struct.unpack_from("=I", data, 4)[0] == surface
+               for resource, opcode, data in events)
+
+
+def check_grab(path, actor, root):
+    client = InputClient(path)
+    x11 = actor.connection
+    try:
+        window = parent_window(client, actor, root)
+        actor.focus(window)
+        client.until(client.keyboard, KEYBOARD_ENTER)
+        actor.fake(MOTION, x=PARENT_X + 6, y=PARENT_Y + 6)
+        client.until(client.pointer, POINTER_ENTER)
+        actor.fake(BUTTON_PRESS, 3)
+        data, _ = client.until(client.pointer, POINTER_BUTTON)
+        serial, _, _, state = struct.unpack("=IIII", data)
+        assert state == 1
+
+        rejected = new_popup(client, client.xdg)
+        start_grab(client, rejected[2], serial - 1)
+        _, events = client.until(rejected[2], POPUP_DONE)
+        assert not focused(events, client.keyboard, rejected[0])
+        destroy_popup(client, *rejected)
+
+        menu = new_popup(client, client.xdg)
+        start_grab(client, menu[2], serial)
+        assert configure_popup(client, *menu) == (20, 38, 20, 24)
+        events = publish(client, menu[0], solid(POPUP_COLOR, 20, 24))
+        assert focused(events, client.keyboard, menu[0])
+        actor.fake(BUTTON_RELEASE, 3)
+        client.until(client.pointer, POINTER_BUTTON)
+        actor.fake(MOTION, x=PARENT_X + 25, y=PARENT_Y + 43)
+        data, _ = client.until(client.pointer, POINTER_ENTER)
+        assert struct.unpack_from("=I", data, 4)[0] == menu[0]
+        actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)
+        actor.fake(KEY_RELEASE, KEY_A + KEYCODE_OFFSET)
+        data, _ = client.until(client.keyboard, KEYBOARD_KEY)
+        assert struct.unpack("=IIII", data)[2:] == (KEY_A, 1)
+        client.until(client.keyboard, KEYBOARD_KEY)
+
+        sub = new_popup(client, menu[1], size=(10, 8), anchor=(2, 2, 1, 1),
+                        adjustment=0)
+        start_grab(client, sub[2], serial)
+        assert configure_popup(client, *sub) == (3, 3, 10, 8)
+        events = publish(client, sub[0], solid(POPUP_COLOR, 10, 8))
+        assert focused(events, client.keyboard, sub[0])
+        client.send(sub[2], POPUP_DESTROY)
+        _, events = client.until(client.keyboard, KEYBOARD_ENTER)
+        assert focused(events, client.keyboard, menu[0])
+        client.send(sub[1], DESTROY)
+        client.send(sub[0], DESTROY)
+        client.sync()
+
+        sub = new_popup(client, menu[1], size=(10, 8), anchor=(2, 2, 1, 1),
+                        adjustment=0)
+        start_grab(client, sub[2], serial)
+        configure_popup(client, *sub)
+        publish(client, sub[0], solid(POPUP_COLOR, 10, 8))
+        actor.fake(MOTION, x=4, y=4)
+        actor.fake(BUTTON_PRESS, 1)
+        actor.fake(BUTTON_RELEASE, 1)
+        _, events = client.until(menu[2], POPUP_DONE)
+        assert any(resource == sub[2] and opcode == POPUP_DONE
+                   for resource, opcode, _ in events)
+        destroy_popup(client, *sub)
+        destroy_popup(client, *menu)
+
+        # A keyboard-initiated menu can acquire a new grab after dismissal.
+        actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)
+        data, _ = client.until(client.keyboard, KEYBOARD_KEY)
+        serial = struct.unpack_from("=I", data)[0]
+        actor.fake(KEY_RELEASE, KEY_A + KEYCODE_OFFSET)
+        client.until(client.keyboard, KEYBOARD_KEY)
+        menu = new_popup(client, client.xdg)
+        start_grab(client, menu[2], serial)
+        configure_popup(client, *menu)
+        events = publish(client, menu[0], solid(POPUP_COLOR, 20, 24))
+        assert focused(events, client.keyboard, menu[0])
+        actor.fake(KEY_PRESS, ESCAPE)
+        actor.fake(KEY_RELEASE, ESCAPE)
+        client.until(menu[2], POPUP_DONE)
+        destroy_popup(client, *menu)
+
+        # A client can disconnect with a menu still holding both X grabs.
+        actor.fake(KEY_PRESS, KEY_A + KEYCODE_OFFSET)
+        data, _ = client.until(client.keyboard, KEYBOARD_KEY)
+        serial = struct.unpack_from("=I", data)[0]
+        actor.fake(KEY_RELEASE, KEY_A + KEYCODE_OFFSET)
+        client.until(client.keyboard, KEYBOARD_KEY)
+        menu = new_popup(client, client.xdg)
+        start_grab(client, menu[2], serial)
+        configure_popup(client, *menu)
+        publish(client, menu[0], solid(POPUP_COLOR, 20, 24))
+    finally:
+        client.close()
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while input_output_windows(x11, root):
+        assert time.monotonic() < deadline, "popup windows survived disconnect"
+        time.sleep(POLL_INTERVAL)
+    wm_grab(x11, root)
+    x11.sendall(struct.pack("<BBHI", UNGRAB_POINTER, 0, 2, 0))
+    actor.sync()
+
+
+def check_popup_errors(path, actor, root):
+    for failure in ("parent", "after-map", "stack"):
+        client = XdgClient(path)
+        try:
+            if failure != "parent":
+                parent_window(client, actor, root)
+            menu = new_popup(client, client.xdg)
+            if failure == "parent":
+                client.send(menu[0], COMMIT)
+                expected = (client.base, 3)
+            else:
+                configure_popup(client, *menu)
+                publish(client, menu[0], solid(POPUP_COLOR, 20, 24))
+                if failure == "after-map":
+                    seat = client.bind("wl_seat")
+                    client.send(menu[2], POPUP_GRAB, struct.pack("=II", seat, 1))
+                    expected = (menu[2], 0)
+                else:
+                    sub = new_popup(client, menu[1], size=(10, 8),
+                                    anchor=(2, 2, 1, 1), adjustment=0)
+                    configure_popup(client, *sub)
+                    publish(client, sub[0], solid(POPUP_COLOR, 10, 8))
+                    client.send(menu[2], POPUP_DESTROY)
+                    expected = (client.base, 2)
+            try:
+                client.sync()
+            except WaylandProtocolError as error:
+                assert (error.object_id, error.code) == expected, (failure, error)
+            else:
+                raise AssertionError(f"Invalid popup request accepted: {failure}")
+        finally:
+            client.close()
+        deadline = time.monotonic() + STARTUP_TIMEOUT
+        while input_output_windows(actor.connection, root):
+            assert time.monotonic() < deadline, failure
+            time.sleep(POLL_INTERVAL)
+
+
 def main():
     host, module = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="meatball-popup-") as directory:
@@ -158,7 +314,10 @@ def main():
             x11, setup = connect_x11(display, return_setup=True)
             try:
                 root = root_window(setup)
-                check_popup(path, XInput(x11, root), root)
+                actor = XInput(x11, root)
+                check_popup(path, actor, root)
+                check_grab(path, actor, root)
+                check_popup_errors(path, actor, root)
                 assert process.poll() is None
             finally:
                 x11.close()

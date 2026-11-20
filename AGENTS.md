@@ -214,6 +214,21 @@ Replies to older configures preserve the WM's latest native size until the
 matching reply is committed. Repaints preserve unchanged input shapes, frame
 extents, and size hints.
 
+### Popups
+
+Version 1 xdg-shell popups use override-redirect X11 windows and support
+nested menus. Positioners place popups relative to the parent's committed
+window geometry and apply flip, slide, and resize constraints against the
+RandR output at the anchor. Popups follow parent movement and are dismissed
+in reverse stacking order when a parent unmaps.
+
+Explicit popup grabs validate a button or key serial from the parent and
+acquire the seat's X11 pointer and keyboard devices. Pointer events continue
+to reach surfaces owned by the same client, and the topmost grabbing popup
+receives keyboard focus. Outside clicks on other X11 windows, Escape, and
+seat removal dismiss the grab stack. Destroying a nested popup returns the
+grab to its parent. Popup reposition requests require xdg-shell version 3.
+
 ### Subsurfaces
 
 Version 1 `wl_subcompositor` supports synchronized and desynchronized content
@@ -320,7 +335,6 @@ Xdnd versions 1 and 2 are not implemented.
 ## Still to port
 
 - Additional DMA-BUF formats.
-- Popups.
 - Settings.
 - Leases.
 - Text-input-v3 is deferred.
@@ -358,6 +372,9 @@ Every check runs against the isolated module test host.
 - `native-xdg` checks mapped pixel content, a test X11 window manager, configure
   serials, WM messages and properties, size hints, parent inheritance, protocol
   errors, remapping, and resets.
+- `native-popup` checks positioner constraints, pixel readback, parent movement,
+  nested placement and dismissal, serial validation, pointer and keyboard grabs,
+  focus restoration, and grab cleanup on disconnect.
 - `native-present` checks copied pixels and matches Wayland frame callback
   timestamps to X11 Present pixmap completion events. Later commits wait for
   a separate refresh.

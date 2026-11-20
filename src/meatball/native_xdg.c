@@ -255,6 +255,7 @@ struct MbXdgSurface
     struct Positioner positioner;
     int32_t popup_x, popup_y;
     Bool dismissed;
+    uint64_t grab_seat;
     MbSurface *surface;
     unsigned int refs;
     struct wl_list configures;
@@ -279,6 +280,7 @@ static void wm_message (struct MbXdgSurface *, Atom, CARD32, CARD32, CARD32,
                         CARD32, CARD32, DeviceIntPtr);
 
 static void dismiss_children (struct MbXdgSurface *parent);
+static void dismiss_popup (struct MbXdgSurface *xdg, Bool notify);
 
 static Bool
 apply_bounds (MbSurface *surface, WindowPtr window)
@@ -467,6 +469,9 @@ xdg_destroyed (struct wl_resource *resource)
 {
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
 
+    dismiss_children (xdg);
+    if (xdg->popup)
+        dismiss_popup (xdg, FALSE);
     xdg->resource = NULL;
     xdg->base->children--;
     if (xdg->surface)
@@ -1073,6 +1078,15 @@ dismiss_popup (struct MbXdgSurface *xdg, Bool notify)
     wl_list_init (&xdg->popup_link);
     if (window)
         UnmapWindow (window, FALSE);
+    if (xdg->grab_seat && xdg->surface)
+    {
+        struct MbXdgSurface *parent = xdg->popup_parent;
+
+        mb_input_end_popup (
+            xdg->grab_seat, xdg->surface,
+            parent->grab_seat == xdg->grab_seat ? parent->surface : NULL);
+    }
+    xdg->grab_seat = 0;
     if (notify && xdg->popup && xdg->surface && !xdg->surface->client->failed)
         xdg_popup_send_popup_done (xdg->popup);
 }
@@ -1093,6 +1107,17 @@ dismiss_children (struct MbXdgSurface *parent)
         if (ancestor)
             dismiss_popup (popup, TRUE);
     }
+}
+
+void
+mb_xdg_dismiss_grab (MbSurface *surface)
+{
+    struct MbXdgSurface *popup = surface->xdg;
+
+    while (popup->popup_parent->grab_seat == popup->grab_seat)
+        popup = popup->popup_parent;
+    dismiss_children (popup);
+    dismiss_popup (popup, TRUE);
 }
 
 static Bool
@@ -1157,11 +1182,33 @@ popup_grab (struct wl_client *client, struct wl_resource *resource,
             struct wl_resource *seat, uint32_t serial)
 {
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
+    struct MbXdgSurface *parent = xdg->popup_parent;
 
-    if (xdg->map_requested)
+    if (xdg->map_requested || xdg->grab_seat)
+    {
         wl_resource_post_error (resource, XDG_POPUP_ERROR_INVALID_GRAB,
-                                "popup already mapped");
-    else
+                                "popup already mapped or grabbed");
+        return;
+    }
+    if (xdg->dismissed)
+        return;
+    if (parent->dismissed)
+    {
+        dismiss_popup (xdg, TRUE);
+        return;
+    }
+    if (parent->popup && !parent->grab_seat)
+    {
+        wl_resource_post_error (xdg->base->resource,
+                                XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                                "grabbing popup requires a grabbing parent");
+        return;
+    }
+    if (parent->surface)
+        xdg->grab_seat =
+            mb_input_begin_popup (seat, xdg->surface, parent->surface,
+                                  parent->popup != NULL, serial);
+    if (!xdg->grab_seat)
         dismiss_popup (xdg, TRUE);
 }
 
@@ -1771,6 +1818,8 @@ mb_xdg_map (MbSurface *surface)
             if (MapWindow (window, surface->client->native) != Success)
                 return FALSE;
             xdg->map_requested = TRUE;
+            if (xdg->grab_seat)
+                mb_input_popup_mapped (xdg->grab_seat, surface);
         }
         return TRUE;
     }
@@ -1916,7 +1965,11 @@ mb_xdg_event (MbSurface *surface, const xEvent *event)
     if (!xdg)
         return;
     if (type == UnmapNotify)
+    {
         dismiss_children (xdg);
+        if (xdg->popup && xdg->map_requested)
+            dismiss_popup (xdg, TRUE);
+    }
     if (type == ConfigureNotify && xdg->toplevel)
     {
         struct MbXdgSurface *popup;
