@@ -60,7 +60,7 @@ typedef struct MbSurfaceCommit
     MbSurface *surface;
     MbSurfaceContent *content;
     MbXdgCommitState xdg;
-    struct wl_list frames;
+    struct wl_list frames, constraints;
     pixman_region32_t input;
     Bool input_default;
     MbViewportState crop;
@@ -86,7 +86,7 @@ struct MbSurface
     struct MbViewport *viewport;
     MbViewportState crop, pending_crop;
     MbWindow window;
-    struct wl_list pending_frames;
+    struct wl_list pending_frames, constraints;
     struct wl_list frames;
     pixman_region32_t pending_input;
     pixman_region32_t input;

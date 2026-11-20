@@ -1,13 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "pointer-constraints.h"
 #include "server.h"
 
 #include <X11/extensions/XI2.h>
 #include <X11/extensions/XI2proto.h>
+#include <X11/extensions/shapeconst.h>
 #include <exevents.h>
 #include <extnsionst.h>
 #include <inputstr.h>
 #include <linux/input-event-codes.h>
+#include <regionstr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +20,7 @@
 #include <xkbsrv.h>
 
 #define SEAT_VERSION 5
+#define CONSTRAINTS_VERSION 1
 #define SEAT_NAME_FORMAT "spaghetti-seat-%d-%d"
 #define SEAT_NAME_SIZE 64
 #define INPUT_QUEUE_LIMIT (1024 * 1024)
@@ -64,9 +68,33 @@ struct InputSerial
     XID action_window;
 };
 
+struct PointerConstraint
+{
+    struct wl_list seat_link, surface_link;
+    struct wl_resource *resource;
+    struct MbSeat *seat;
+    MbSurface *surface;
+    pixman_region32_t region, pending;
+    uint64_t revision, pending_revision;
+    Bool region_default, pending_default, locked, oneshot;
+    int32_t x, y;
+    Window window;
+    unsigned int refs;
+};
+
+struct ConstraintCommit
+{
+    struct wl_list link;
+    struct PointerConstraint *constraint;
+    pixman_region32_t region;
+    uint64_t revision;
+    Bool region_default;
+};
+
 struct MbSeat
 {
-    struct wl_list link, resources;
+    struct wl_list link, resources, constraints;
+    struct PointerConstraint *constraint;
     struct wl_global *global;
     uint64_t lifetime;
     int pointer_id, keyboard_id;
@@ -127,6 +155,7 @@ struct InputEvent
 
 struct MbInput
 {
+    struct wl_global *constraints_global;
     struct wl_list seats, events;
     size_t queued;
     int xi_opcode;
@@ -573,6 +602,294 @@ static const struct wl_seat_interface seat_implementation = {
     .release = release,
 };
 
+static void
+constraint_unref (struct PointerConstraint *constraint)
+{
+    if (--constraint->refs)
+        return;
+    pixman_region32_fini (&constraint->region);
+    pixman_region32_fini (&constraint->pending);
+    free (constraint);
+}
+
+static void
+constraint_detach (struct PointerConstraint *constraint)
+{
+    wl_list_remove (&constraint->seat_link);
+    wl_list_init (&constraint->seat_link);
+    wl_list_remove (&constraint->surface_link);
+    wl_list_init (&constraint->surface_link);
+    constraint->seat = NULL;
+    constraint->surface = NULL;
+}
+
+static Bool
+constraint_owns_grab (struct MbSeat *seat, GrabPtr grab)
+{
+    return seat->constraint && grab && grab->confineTo &&
+           grab->confineTo->drawable.id == seat->constraint->window;
+}
+
+static void
+constraint_deactivate (struct PointerConstraint *constraint, Bool notify)
+{
+    Window id = constraint->window;
+    struct MbSeat *seat;
+    ClientPtr client;
+    DeviceIntPtr pointer;
+    WindowPtr window;
+
+    if (!id)
+        return;
+    seat = constraint->seat;
+    client = constraint->surface->client->native;
+    if (client &&
+        dixLookupDevice (&pointer, seat->pointer_id, client, DixGrabAccess) ==
+            Success &&
+        constraint_owns_grab (seat, pointer->deviceGrab.grab))
+        pointer->deviceGrab.DeactivateGrab (pointer);
+    constraint->window = None;
+    seat->constraint = NULL;
+    if (client &&
+        dixLookupWindow (&window, id, client, DixDestroyAccess) == Success)
+        FreeResource (id, RT_NONE);
+    if (notify && !constraint->surface->client->failed)
+    {
+        if (constraint->locked)
+            zwp_locked_pointer_v1_send_unlocked (constraint->resource);
+        else
+            zwp_confined_pointer_v1_send_unconfined (constraint->resource);
+    }
+    if (constraint->oneshot)
+        constraint_detach (constraint);
+}
+
+static void
+constraint_destroyed (struct wl_resource *resource)
+{
+    struct PointerConstraint *constraint =
+        wl_resource_get_user_data (resource);
+
+    if (constraint->window)
+        constraint_deactivate (constraint, FALSE);
+    constraint_detach (constraint);
+    constraint_unref (constraint);
+}
+
+static void
+constraint_destroy (struct wl_client *client, struct wl_resource *resource)
+{
+    wl_resource_destroy (resource);
+}
+
+static void
+constraint_set_region (struct wl_client *client, struct wl_resource *resource,
+                       struct wl_resource *region)
+{
+    struct PointerConstraint *constraint =
+        wl_resource_get_user_data (resource);
+
+    if (!constraint->surface)
+        return;
+    if (region && !pixman_region32_copy (&constraint->pending,
+                                         wl_resource_get_user_data (region)))
+        wl_resource_post_no_memory (resource);
+    else
+    {
+        constraint->pending_default = !region;
+        constraint->pending_revision++;
+    }
+}
+
+static void
+constraint_hint (struct wl_client *client, struct wl_resource *resource,
+                 wl_fixed_t x, wl_fixed_t y)
+{
+    /* Preserve the position at which the pointer was unlocked. */
+}
+
+static const struct zwp_locked_pointer_v1_interface lock_implementation = {
+    .destroy = constraint_destroy,
+    .set_cursor_position_hint = constraint_hint,
+    .set_region = constraint_set_region,
+};
+
+static const struct zwp_confined_pointer_v1_interface
+    confine_implementation = {
+        .destroy = constraint_destroy,
+        .set_region = constraint_set_region,
+    };
+
+static void
+create_constraint (struct wl_client *client, struct wl_resource *manager,
+                   uint32_t id, struct wl_resource *surface_resource,
+                   struct wl_resource *pointer, struct wl_resource *region,
+                   uint32_t lifetime, Bool locked)
+{
+    MbSurface *surface = wl_resource_get_user_data (surface_resource);
+    struct InputResource *input = wl_resource_get_user_data (pointer);
+    struct PointerConstraint *constraint;
+
+    wl_list_for_each (constraint, &surface->constraints, surface_link)
+    {
+        if (constraint->seat != input->seat)
+            continue;
+        wl_resource_post_error (
+            manager, ZWP_POINTER_CONSTRAINTS_V1_ERROR_ALREADY_CONSTRAINED,
+            "surface already has a constraint for this seat");
+        return;
+    }
+    if (lifetime != ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT &&
+        lifetime != ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT)
+    {
+        wl_client_post_implementation_error (
+            client, "invalid pointer constraint lifetime");
+        return;
+    }
+    constraint = calloc (1, sizeof (*constraint));
+    if (!constraint)
+        goto no_memory;
+    constraint->refs = 1;
+    pixman_region32_init (&constraint->region);
+    pixman_region32_init (&constraint->pending);
+    if (region &&
+        (!pixman_region32_copy (&constraint->region,
+                                wl_resource_get_user_data (region)) ||
+         !pixman_region32_copy (&constraint->pending, &constraint->region)))
+        goto free_constraint;
+    constraint->resource =
+        wl_resource_create (client,
+                            locked ? &zwp_locked_pointer_v1_interface
+                                   : &zwp_confined_pointer_v1_interface,
+                            wl_resource_get_version (manager), id);
+    if (!constraint->resource)
+        goto free_constraint;
+    constraint->locked = locked;
+    constraint->oneshot =
+        lifetime == ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT;
+    constraint->region_default = constraint->pending_default = !region;
+    wl_list_init (&constraint->surface_link);
+    wl_list_init (&constraint->seat_link);
+    if (!input->seat->removed && !input->seat->retire_pending)
+    {
+        constraint->surface = surface;
+        constraint->seat = input->seat;
+        wl_list_insert (&surface->constraints, &constraint->surface_link);
+        wl_list_insert (&input->seat->constraints, &constraint->seat_link);
+    }
+    wl_resource_set_implementation (constraint->resource,
+                                    locked ? (const void *)&lock_implementation
+                                           : &confine_implementation,
+                                    constraint, constraint_destroyed);
+    return;
+
+free_constraint:
+    constraint_unref (constraint);
+no_memory:
+    wl_client_post_no_memory (client);
+}
+
+static void
+lock_pointer (struct wl_client *client, struct wl_resource *manager,
+              uint32_t id, struct wl_resource *surface,
+              struct wl_resource *pointer, struct wl_resource *region,
+              uint32_t lifetime)
+{
+    create_constraint (client, manager, id, surface, pointer, region, lifetime,
+                       TRUE);
+}
+
+static void
+confine_pointer (struct wl_client *client, struct wl_resource *manager,
+                 uint32_t id, struct wl_resource *surface,
+                 struct wl_resource *pointer, struct wl_resource *region,
+                 uint32_t lifetime)
+{
+    create_constraint (client, manager, id, surface, pointer, region, lifetime,
+                       FALSE);
+}
+
+static const struct zwp_pointer_constraints_v1_interface
+    constraints_implementation = {
+        .destroy = constraint_destroy,
+        .lock_pointer = lock_pointer,
+        .confine_pointer = confine_pointer,
+    };
+
+static void
+bind_constraints (struct wl_client *client, void *data, uint32_t version,
+                  uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create (
+        client, &zwp_pointer_constraints_v1_interface, version, id);
+
+    if (resource)
+        wl_resource_set_implementation (resource, &constraints_implementation,
+                                        NULL, NULL);
+    else
+        wl_client_post_no_memory (client);
+}
+
+Bool
+mb_input_capture_constraints (MbSurfaceCommit *commit)
+{
+    struct PointerConstraint *constraint;
+
+    wl_list_for_each (constraint, &commit->surface->constraints, surface_link)
+    {
+        struct ConstraintCommit *state;
+
+        if (constraint->pending_revision == constraint->revision)
+            continue;
+        state = calloc (1, sizeof (*state));
+        if (!state)
+            return FALSE;
+        state->constraint = constraint;
+        constraint->refs++;
+        state->revision = constraint->pending_revision;
+        state->region_default = constraint->pending_default;
+        pixman_region32_init (&state->region);
+        wl_list_insert (&commit->constraints, &state->link);
+        if (!state->region_default &&
+            !pixman_region32_copy (&state->region, &constraint->pending))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+void
+mb_input_apply_constraints (MbSurfaceCommit *commit)
+{
+    struct ConstraintCommit *state;
+
+    wl_list_for_each (state, &commit->constraints, link)
+    {
+        struct PointerConstraint *constraint = state->constraint;
+
+        if (constraint->surface != commit->surface)
+            continue;
+        pixman_region32_fini (&constraint->region);
+        constraint->region = state->region;
+        constraint->region_default = state->region_default;
+        constraint->revision = state->revision;
+        pixman_region32_init (&state->region);
+    }
+}
+
+void
+mb_input_free_constraints (MbSurfaceCommit *commit)
+{
+    struct ConstraintCommit *state, *next;
+
+    wl_list_for_each_safe (state, next, &commit->constraints, link)
+    {
+        pixman_region32_fini (&state->region);
+        constraint_unref (state->constraint);
+        wl_list_remove (&state->link);
+        free (state);
+    }
+}
+
 uint64_t
 mb_input_seat_id (struct wl_resource *resource)
 {
@@ -608,13 +925,18 @@ mb_input_take_grab (MbSurface *surface, struct wl_resource *resource,
                          DixGrabAccess) != Success)
         return FALSE;
     grab = pointer->deviceGrab.grab;
-    if (!grab || !pointer->deviceGrab.implicitGrab ||
+    if (!grab ||
+        (!pointer->deviceGrab.implicitGrab &&
+         !constraint_owns_grab (seat, grab)) ||
         CLIENT_ID (grab->resource) != surface->client->native->index)
         return FALSE;
     *result = (MbInteractiveGrab){ pointer, pointer->spriteInfo->sprite->hot.x,
                                    pointer->spriteInfo->sprite->hot.y,
                                    seat->grab_button };
-    pointer->deviceGrab.DeactivateGrab (pointer);
+    if (seat->constraint)
+        constraint_deactivate (seat->constraint, TRUE);
+    else
+        pointer->deviceGrab.DeactivateGrab (pointer);
     pointer_focus (seat, NULL, 0, 0);
     seat->grab_focus = seat->pointer_root = NULL;
     seat->button_serial = seat->button_count = 0;
@@ -651,6 +973,8 @@ pointer_focus (struct MbSeat *seat, MbSurface *surface, wl_fixed_t x,
     seat->pointer_y = y;
     if (seat->pointer_focus == surface)
         return;
+    if (seat->constraint && seat->constraint->surface != surface)
+        constraint_deactivate (seat->constraint, TRUE);
     serial = wl_display_next_serial (compositor.wl_display);
     wl_list_for_each (input, &seat->resources, link)
     {
@@ -1001,7 +1325,13 @@ static void
 retire_seat (struct MbSeat *seat)
 {
     struct InputResource *resource;
+    struct PointerConstraint *constraint, *next;
 
+    wl_list_for_each_safe (constraint, next, &seat->constraints, seat_link)
+    {
+        constraint_deactivate (constraint, TRUE);
+        constraint_detach (constraint);
+    }
     pointer_focus (seat, NULL, 0, 0);
     keyboard_focus (seat, NULL, NULL);
     seat->grab_focus = seat->pointer_root = NULL;
@@ -1057,6 +1387,7 @@ create_seat (DeviceIntPtr pointer, DeviceIntPtr keyboard)
     if (!seat)
         return FALSE;
     wl_list_init (&seat->resources);
+    wl_list_init (&seat->constraints);
     seat->pointer_id = pointer->id;
     seat->keyboard_id = keyboard->id;
     seat->lifetime = ++next_seat_lifetime;
@@ -1235,8 +1566,8 @@ mb_input_drag_position (MbSurface *root, int32_t x, int32_t y, uint32_t time)
 }
 
 static Bool
-grab_seat_device (ClientPtr client, DeviceIntPtr device, Window root,
-                  Bool keyboard)
+grab_seat_device (ClientPtr client, DeviceIntPtr device, Window window,
+                  Bool keyboard, Window confine)
 {
     unsigned char events[XIMaskLen (XI_LASTEVENT)] = { 0 };
     unsigned char empty[sizeof (events)] = { 0 };
@@ -1260,10 +1591,226 @@ grab_seat_device (ClientPtr client, DeviceIntPtr device, Window root,
         XISetMask (events, XI_ButtonRelease);
         XISetMask (events, XI_Motion);
     }
-    return GrabDevice (client, device, GrabModeAsync, GrabModeAsync, root,
-                       FALSE, CurrentTime, &mask, XI2, None, None,
+    return GrabDevice (client, device, GrabModeAsync, GrabModeAsync, window,
+                       FALSE, CurrentTime, &mask, XI2, None, confine,
                        &status) == Success &&
            status == GrabSuccess;
+}
+
+static RegionPtr
+constraint_shape (struct PointerConstraint *constraint, MbSurface *root,
+                  WindowPtr native, int64_t *offset_x, int64_t *offset_y)
+{
+    MbSurface *surface = constraint->surface;
+    MbSceneIterator iterator = { .root = root, .surface = root };
+    MbSurface *node;
+    pixman_region32_t region;
+    RegionPtr shape = NULL;
+    BoxPtr boxes = NULL;
+    int count, used = 0;
+    ScreenPtr screen = native->drawable.pScreen;
+    const int left = max (0, -native->drawable.x);
+    const int top = max (0, -native->drawable.y);
+    const int right =
+        min (native->drawable.width, screen->width - native->drawable.x);
+    const int bottom =
+        min (native->drawable.height, screen->height - native->drawable.y);
+
+    while ((node = mb_scene_next (&iterator)) && node != surface)
+        continue;
+    if (!node || left >= right || top >= bottom)
+        return NULL;
+
+    *offset_x = iterator.x - root->scene_x;
+    *offset_y = iterator.y - root->scene_y;
+    pixman_region32_init_rect (&region, 0, 0, surface->width, surface->height);
+    if ((!surface->input_default &&
+         !pixman_region32_intersect (&region, &region, &surface->input)) ||
+        (!constraint->region_default &&
+         !pixman_region32_intersect (&region, &region, &constraint->region)))
+        goto out;
+    pixman_box32_t *rects = pixman_region32_rectangles (&region, &count);
+
+    if (!count)
+        goto out;
+    boxes = calloc (count, sizeof (*boxes));
+    if (!boxes)
+        goto out;
+    for (int i = 0; i < count; i++)
+    {
+        int64_t x1 = max (left, rects[i].x1 + *offset_x);
+        int64_t y1 = max (top, rects[i].y1 + *offset_y);
+        int64_t x2 = min (right, rects[i].x2 + *offset_x);
+        int64_t y2 = min (bottom, rects[i].y2 + *offset_y);
+
+        if (x1 < x2 && y1 < y2)
+            boxes[used++] = (BoxRec){ x1, y1, x2, y2 };
+    }
+    if (used)
+    {
+        shape = RegionCreate (NULL, 0);
+        if (shape && !RegionInitBoxes (shape, boxes, used))
+        {
+            RegionDestroy (shape);
+            shape = NULL;
+        }
+    }
+
+out:
+    free (boxes);
+    pixman_region32_fini (&region);
+    return shape;
+}
+
+static WindowPtr
+constraint_window (WindowPtr parent, ClientPtr client)
+{
+    XID id = FakeClientID (client->index);
+    XID override = TRUE;
+    int error;
+    WindowPtr window = CreateWindow (id, parent, 0, 0, parent->drawable.width,
+                                     parent->drawable.height, 0, InputOnly,
+                                     CWOverrideRedirect, &override, 0, client,
+                                     CopyFromParent, &error);
+
+    if (!window || !AddResource (id, RT_WINDOW, window))
+        return NULL;
+    if (!MakeWindowOptional (window))
+        goto fail;
+    window->optional->inputShape = RegionCreate (NULL, 0);
+    if (!window->optional->inputShape)
+        goto fail;
+    return window;
+
+fail:
+    FreeResource (id, RT_NONE);
+    return NULL;
+}
+
+static void
+update_constraint (struct MbSeat *seat)
+{
+    struct PointerConstraint *constraint = seat->constraint;
+    MbSurface *root, *surface = seat->pointer_focus;
+    WindowPtr native, window = NULL;
+    DeviceIntPtr pointer;
+    ClientPtr client;
+    RegionPtr shape = NULL;
+    GrabPtr grab;
+    int64_t dx, dy, x, y;
+
+    if (seat->popup_grab || seat->drag_owner || !surface ||
+        wl_list_empty (&surface->constraints))
+        goto deactivate;
+    if (!constraint)
+    {
+        wl_list_for_each (constraint, &surface->constraints, surface_link)
+        {
+            if (constraint->seat == seat)
+                break;
+        }
+        if (&constraint->surface_link == &surface->constraints)
+            return;
+    }
+    root = mb_subsurface_root (surface);
+    client = surface->client->native;
+    if (constraint->surface != surface || !root ||
+        seat->keyboard_focus != root || !client || surface->client->failed)
+        goto deactivate;
+    native = mb_window_get (&root->window, DixManageAccess);
+    if (!native || !native->realized ||
+        dixLookupDevice (&pointer, seat->pointer_id, client, DixGrabAccess) !=
+            Success)
+        goto deactivate;
+    grab = pointer->deviceGrab.grab;
+    if (constraint->window)
+    {
+        if (!constraint_owns_grab (seat, grab) ||
+            grab->confineTo->parent != native)
+            goto deactivate;
+        window = grab->confineTo;
+    }
+    else if (grab || root_for_window (GetSpriteWindow (pointer)) != root)
+        return;
+
+    shape = constraint_shape (constraint, root, native, &dx, &dy);
+    if (!shape)
+        goto deactivate;
+    if (window && constraint->locked)
+    {
+        x = constraint->x + dx;
+        y = constraint->y + dy;
+    }
+    else
+    {
+        x = pointer->spriteInfo->sprite->hot.x - native->drawable.x;
+        y = pointer->spriteInfo->sprite->hot.y - native->drawable.y;
+    }
+    if (x < 0 || y < 0 || x >= native->drawable.width ||
+        y >= native->drawable.height ||
+        !RegionContainsPoint (shape, x, y, NULL))
+        goto deactivate;
+    if (constraint->locked)
+    {
+        BoxRec point = { x, y, x + 1, y + 1 };
+
+        RegionReset (shape, &point);
+    }
+
+    if (!window)
+    {
+        wl_fixed_t sx, sy;
+
+        if (hit_surface (root, x + root->scene_x, y + root->scene_y, NULL, &sx,
+                         &sy) != surface)
+            goto deactivate;
+        window = constraint_window (native, client);
+        if (!window)
+            goto deactivate;
+        window->optional->boundingShape = shape;
+        native->drawable.pScreen->SetShape (window, ShapeBounding);
+        if (MapWindow (window, client) != Success ||
+            !grab_seat_device (client, pointer, native->drawable.id, FALSE,
+                               window->drawable.id))
+        {
+            FreeResource (window->drawable.id, RT_NONE);
+            return;
+        }
+        constraint->x = x - dx;
+        constraint->y = y - dy;
+        constraint->window = window->drawable.id;
+        seat->constraint = constraint;
+        if (constraint->locked)
+            zwp_locked_pointer_v1_send_locked (constraint->resource);
+        else
+            zwp_confined_pointer_v1_send_confined (constraint->resource);
+        return;
+    }
+
+    if (window->drawable.width != native->drawable.width ||
+        window->drawable.height != native->drawable.height)
+    {
+        XID size[] = { native->drawable.width, native->drawable.height };
+
+        if (ConfigureWindow (window, CWWidth | CWHeight, size, client) !=
+            Success)
+            goto deactivate;
+    }
+    if (!RegionEqual (shape, window->optional->boundingShape))
+    {
+        RegionDestroy (window->optional->boundingShape);
+        window->optional->boundingShape = shape;
+        native->drawable.pScreen->SetShape (window, ShapeBounding);
+    }
+    else
+        RegionDestroy (shape);
+    return;
+
+deactivate:
+    if (shape)
+        RegionDestroy (shape);
+    if (seat->constraint)
+        constraint_deactivate (seat->constraint, TRUE);
 }
 
 uint64_t
@@ -1301,14 +1848,17 @@ mb_input_begin_popup (struct wl_resource *resource, MbSurface *popup,
     {
         Window root = popup->window.screen->root->drawable.id;
 
-        if (!action ||
-            dixLookupDevice (&pointer, seat->pointer_id, client,
+        if (!action)
+            return 0;
+        if (seat->constraint)
+            constraint_deactivate (seat->constraint, TRUE);
+        if (dixLookupDevice (&pointer, seat->pointer_id, client,
                              DixGrabAccess) != Success ||
             dixLookupDevice (&keyboard, seat->keyboard_id, client,
                              DixGrabAccess) != Success ||
-            !grab_seat_device (client, keyboard, root, TRUE))
+            !grab_seat_device (client, keyboard, root, TRUE, None))
             return 0;
-        if (!grab_seat_device (client, pointer, root, FALSE))
+        if (!grab_seat_device (client, pointer, root, FALSE, None))
         {
             keyboard->deviceGrab.DeactivateGrab (keyboard);
             return 0;
@@ -1389,12 +1939,17 @@ mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
                          DixGrabAccess) != Success)
         return FALSE;
     grab = pointer->deviceGrab.grab;
-    if (!grab || !pointer->deviceGrab.implicitGrab || grab->grabtype != XI2 ||
+    if (!grab ||
+        (!pointer->deviceGrab.implicitGrab &&
+         !constraint_owns_grab (seat, grab)) ||
+        grab->grabtype != XI2 ||
         CLIENT_ID (grab->resource) != origin->client->native->index)
         return FALSE;
     seat->drag_screen = pointer->spriteInfo->sprite->hotPhys.pScreen;
+    if (seat->constraint)
+        constraint_deactivate (seat->constraint, TRUE);
     if (!grab_seat_device (origin->client->native, pointer,
-                           seat->drag_screen->root->drawable.id, FALSE))
+                           seat->drag_screen->root->drawable.id, FALSE, None))
         return FALSE;
     if (!pointer->button || !pointer->button->buttonsDown)
     {
@@ -1449,6 +2004,9 @@ pointer_motion (struct MbSeat *seat, MbSurface *root, double x, double y,
     MbSurface *surface;
     wl_fixed_t sx = 0, sy = 0;
 
+    if (root && seat->constraint && seat->constraint->locked &&
+        mb_subsurface_root (seat->constraint->surface) == root)
+        return;
     surface = root ? hit_surface (root, x, y,
                                   seat->button_count ? seat->grab_focus : NULL,
                                   &sx, &sy)
@@ -1900,6 +2458,7 @@ mb_input_dispatch (void)
             if (!window || !window->realized || !seat->keyboard_focus->pixels)
                 keyboard_focus (seat, NULL, NULL);
         }
+        update_constraint (seat);
     }
     return !wl_list_empty (&input->events);
 }
@@ -1933,7 +2492,14 @@ void
 mb_input_surface_destroyed (MbSurface *surface)
 {
     struct MbSeat *seat;
+    struct PointerConstraint *constraint, *next;
 
+    wl_list_for_each_safe (constraint, next, &surface->constraints,
+                           surface_link)
+    {
+        constraint_deactivate (constraint, TRUE);
+        constraint_detach (constraint);
+    }
     if (!compositor.input)
         return;
     wl_list_for_each (seat, &compositor.input->seats, link)
@@ -1973,6 +2539,11 @@ mb_input_initialize (void)
     wl_list_init (&input->events);
     input->xi_opcode = extension->base;
     compositor.input = input;
+    input->constraints_global = wl_global_create (
+        compositor.wl_display, &zwp_pointer_constraints_v1_interface,
+        CONSTRAINTS_VERSION, NULL, bind_constraints);
+    if (!input->constraints_global)
+        goto fail;
     compositor.bridge_client->native->xkbClientFlags |= _XkbClientInitialized;
     compositor.bridge_client->native->mapNotifyMask = XkbAllMapComponentsMask;
     compositor.bridge_client->native->newKeyboardNotifyMask =
@@ -2020,11 +2591,20 @@ mb_input_shutdown (void)
     {
         free_event (event);
     }
+    if (input->constraints_global)
+        wl_global_destroy (input->constraints_global);
     compositor.input = NULL;
     wl_list_for_each_safe (seat, next_seat, &input->seats, link)
     {
         struct InputResource *resource, *next_resource;
+        struct PointerConstraint *constraint, *next_constraint;
 
+        wl_list_for_each_safe (constraint, next_constraint, &seat->constraints,
+                               seat_link)
+        {
+            constraint_deactivate (constraint, FALSE);
+            constraint_detach (constraint);
+        }
         clear_cursor (seat);
         wl_global_destroy (seat->global);
         wl_list_for_each_safe (resource, next_resource, &seat->resources, link)
