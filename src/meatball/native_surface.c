@@ -50,7 +50,7 @@ content_unref (MbSurface *surface, MbSurfaceContent *content)
                                  surface->client->native,
                                  DixDestroyAccess) == Success)
         FreeResource (content->pixels, RT_NONE);
-    mb_shm_buffer_unref (content->buffer);
+    mb_buffer_unref (content->buffer);
     free (content);
 }
 
@@ -326,7 +326,7 @@ surface_destroyed (struct wl_resource *resource)
     if (surface->frame_timer)
         wl_event_source_remove (surface->frame_timer);
     if (surface->pending_buffer)
-        mb_shm_buffer_unref (surface->pending_buffer);
+        mb_buffer_unref (surface->pending_buffer);
     wl_list_for_each_safe (commit, next_commit, &surface->commits, link)
     {
         mb_surface_commit_free (commit);
@@ -363,17 +363,17 @@ surface_attach (struct wl_client *client, struct wl_resource *resource,
 {
     MbSurface *surface = wl_resource_get_user_data (resource);
 
-    MbShmBuffer *shm = buffer ? mb_shm_buffer_acquire (buffer) : NULL;
+    MbBuffer *attached = mb_buffer_acquire (buffer);
 
-    if (buffer && !shm)
+    if (buffer && !attached)
     {
         wl_client_post_implementation_error (
             client, "unsupported buffer implementation");
         return;
     }
     if (surface->pending_buffer)
-        mb_shm_buffer_unref (surface->pending_buffer);
-    surface->pending_buffer = shm;
+        mb_buffer_unref (surface->pending_buffer);
+    surface->pending_buffer = attached;
     surface->pending_x = x;
     surface->pending_y = y;
     surface->attach_pending = TRUE;
@@ -577,7 +577,7 @@ capture_commit (MbSurface *surface)
             : wl_container_of (surface->commits.prev, previous, link);
     MbSurfaceContent *content =
         previous ? previous->content : surface->content;
-    MbShmBuffer *buffer = content ? content->buffer : NULL;
+    MbBuffer *buffer = content ? content->buffer : NULL;
     pixman_region32_t *input = previous ? &previous->input : &surface->input;
     MbSurfaceCommit *commit;
     int32_t width = 0, height = 0;
@@ -655,7 +655,7 @@ capture_commit (MbSurface *surface)
             commit->content->refs = 1;
             commit->content->buffer = buffer;
             buffer->refs++;
-            copy = mb_shm_snapshot (buffer, surface->window.screen);
+            copy = buffer->snapshot (buffer, surface->window.screen);
             if (!copy)
                 goto fail;
             id = FakeClientID (surface->client->native->index);
@@ -669,7 +669,7 @@ capture_commit (MbSurface *surface)
                 wl_buffer_send_release (buffer->resource);
         }
         if (surface->pending_buffer)
-            mb_shm_buffer_unref (surface->pending_buffer);
+            mb_buffer_unref (surface->pending_buffer);
         surface->pending_buffer = NULL;
         surface->attach_pending = FALSE;
     }
@@ -742,8 +742,7 @@ mb_surface_update (MbSurface *surface)
     }
     if (iterator.failed || x2 - x1 > MB_MAX_DIMENSION ||
         y2 - y1 > MB_MAX_DIMENSION ||
-        (x2 - x1) * (y2 - y1) >
-            MB_SHM_MAX_SNAPSHOT_BYTES / MB_SHM_BYTES_PER_PIXEL)
+        (x2 - x1) * (y2 - y1) > MB_MAX_SNAPSHOT_BYTES / MB_SHM_BYTES_PER_PIXEL)
     {
         wl_resource_post_error (surface->resource,
                                 WL_SURFACE_ERROR_INVALID_SIZE,

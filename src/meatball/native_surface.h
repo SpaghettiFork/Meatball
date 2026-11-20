@@ -2,6 +2,7 @@
 #ifndef MEATBALL_NATIVE_SURFACE_H
 #define MEATBALL_NATIVE_SURFACE_H
 
+#include "native_buffer.h"
 #include "native_shm.h"
 #include "native_window.h"
 #include <picture.h>
@@ -38,7 +39,7 @@ typedef struct
 typedef struct
 {
     unsigned int refs;
-    MbShmBuffer *buffer;
+    MbBuffer *buffer;
     XID pixels;
 } MbSurfaceContent;
 
@@ -92,8 +93,8 @@ struct MbSurface
     Bool input_default;
     Bool input_changed;
     Bool attach_pending;
-    MbShmBuffer *pending_buffer;
-    MbShmBuffer *buffer;
+    MbBuffer *pending_buffer;
+    MbBuffer *buffer;
     XID pixels;
     MbSurfaceContent *content;
     struct wl_list commits;
