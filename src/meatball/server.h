@@ -33,6 +33,7 @@ typedef struct
     struct MbAtoms atoms;
     RESTYPE window_type;
     struct wl_global *xdg_global;
+    struct wl_global *system_bell_global;
     struct wl_global *shm_global;
     struct wl_global *surface_global;
     struct wl_global *tearing_control_global;

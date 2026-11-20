@@ -39,6 +39,9 @@ if spaghetti_build_dir != ''
     test('native-constraints', python,
          args: ['-B', files('native_constraints.py'), test_host, sauce],
          timeout: 30)
+    test('native-system-bell', python,
+         args: ['-B', files('native_system_bell.py'), test_host, sauce],
+         timeout: 30)
     test('native-relative-pointer', python,
          args: ['-B', files('native_relative_pointer.py'), test_host, sauce],
          timeout: 30)

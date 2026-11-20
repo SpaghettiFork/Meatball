@@ -2,6 +2,7 @@
 
 #include "server.h"
 #include "xdg-shell.h"
+#include "xdg-system-bell.h"
 
 #include <X11/Xatom.h>
 #include <X11/extensions/shapeconst.h>
@@ -17,8 +18,10 @@
 #include <wayland-server-protocol.h>
 #include <window.h>
 #include <xace.h>
+#include <xkbsrv.h>
 
 #define XDG_VERSION 3
+#define SYSTEM_BELL_VERSION 1
 #define CONFIGURE_LIMIT 256
 #define SEND_EVENT_MASK 0x80
 #define WM_SOURCE_APPLICATION 1
@@ -589,7 +592,7 @@ toplevel_destroyed (struct wl_resource *resource)
 }
 
 static void
-toplevel_destroy (struct wl_client *client, struct wl_resource *resource)
+destroy_resource (struct wl_client *client, struct wl_resource *resource)
 {
     wl_resource_destroy (resource);
 }
@@ -968,7 +971,7 @@ set_minimized (struct wl_client *client, struct wl_resource *resource)
 }
 
 static const struct xdg_toplevel_interface toplevel_implementation = {
-    .destroy = toplevel_destroy,
+    .destroy = destroy_resource,
     .set_parent = set_parent,
     .set_title = set_title,
     .set_app_id = set_app_id,
@@ -2188,6 +2191,58 @@ mb_xdg_event (MbSurface *surface, const xEvent *event)
     }
 }
 
+static void
+ring_system_bell (struct wl_client *client, struct wl_resource *resource,
+                  struct wl_resource *surface_resource)
+{
+    MbClient *owner = mb_client_for_wayland (client);
+    WindowPtr window = NULL;
+    DeviceIntPtr keyboard;
+
+    if (!owner || owner->failed || !owner->native)
+        return;
+    if (surface_resource)
+    {
+        MbSurface *surface = wl_resource_get_user_data (surface_resource);
+
+        if (!surface->xdg || !surface->xdg->toplevel)
+            return;
+        window = mb_window_get (&surface->window, DixGetAttrAccess);
+        if (!window)
+            return;
+    }
+    keyboard = PickKeyboard (owner->native);
+    if (!keyboard ||
+        dixLookupDevice (&keyboard, keyboard->id, owner->native,
+                         DixBellAccess) != Success ||
+        !keyboard->kbdfeed)
+        return;
+    KeybdCtrl *ctrl = &keyboard->kbdfeed->ctrl;
+
+    XkbHandleBell (FALSE, FALSE, keyboard, ctrl->bell, ctrl, KbdFeedbackClass,
+                   None, window, owner->native);
+}
+
+static const struct xdg_system_bell_v1_interface system_bell = {
+    .destroy = destroy_resource,
+    .ring = ring_system_bell,
+};
+
+static void
+bind_system_bell (struct wl_client *client, void *data, uint32_t version,
+                  uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create (
+        client, &xdg_system_bell_v1_interface, version, id);
+
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
+    wl_resource_set_implementation (resource, &system_bell, NULL, NULL);
+}
+
 Bool
 mb_xdg_initialize (void)
 {
@@ -2202,12 +2257,20 @@ mb_xdg_initialize (void)
         compositor.xdg_global = NULL;
         return FALSE;
     }
-    return TRUE;
+    compositor.system_bell_global =
+        wl_global_create (compositor.wl_display, &xdg_system_bell_v1_interface,
+                          SYSTEM_BELL_VERSION, NULL, bind_system_bell);
+    return compositor.system_bell_global != NULL;
 }
 
 void
 mb_xdg_shutdown (void)
 {
+    if (compositor.system_bell_global)
+    {
+        wl_global_destroy (compositor.system_bell_global);
+        compositor.system_bell_global = NULL;
+    }
     if (compositor.xdg_global)
     {
         DeleteCallback (&SelectionCallback, selection_changed, NULL);

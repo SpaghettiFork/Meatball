@@ -60,6 +60,14 @@ tearing_control_code = custom_target('native-tearing-control-code',
                                     input: tearing_control_xml, output: 'tearing-control.c',
                                     command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+system_bell_xml = 'wayland-proto/xdg-system-bell-v1.xml'
+system_bell_header = custom_target('native-system-bell-header',
+                                   input: system_bell_xml, output: 'xdg-system-bell.h',
+                                   command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+system_bell_code = custom_target('native-system-bell-code',
+                                 input: system_bell_xml, output: 'xdg-system-bell.c',
+                                 command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -96,6 +104,8 @@ srcs_meatball = [
     relative_pointer_code,
     tearing_control_header,
     tearing_control_code,
+    system_bell_header,
+    system_bell_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')
