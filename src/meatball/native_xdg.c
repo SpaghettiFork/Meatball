@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <property.h>
 #include <propertyst.h>
+#include <randrstr.h>
 #include <selection.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,11 +72,189 @@ struct Configure
     uint32_t serial;
 };
 
+struct Positioner
+{
+    int32_t width, height, offset_x, offset_y;
+    int32_t anchor_x, anchor_y, anchor_width, anchor_height;
+    uint32_t anchor, gravity, adjustment;
+};
+
+static void
+positioner_destroy (struct wl_client *client, struct wl_resource *resource)
+{
+    wl_resource_destroy (resource);
+}
+
+static void
+positioner_destroyed (struct wl_resource *resource)
+{
+    free (wl_resource_get_user_data (resource));
+}
+
+static void
+positioner_size (struct wl_client *client, struct wl_resource *resource,
+                 int32_t width, int32_t height)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+
+    if (width <= 0 || height <= 0)
+    {
+        wl_resource_post_error (resource, XDG_POSITIONER_ERROR_INVALID_INPUT,
+                                "nonpositive popup size");
+        return;
+    }
+    p->width = width;
+    p->height = height;
+}
+
+static void
+positioner_rect (struct wl_client *client, struct wl_resource *resource,
+                 int32_t x, int32_t y, int32_t width, int32_t height)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+
+    if (width <= 0 || height <= 0)
+    {
+        wl_resource_post_error (resource, XDG_POSITIONER_ERROR_INVALID_INPUT,
+                                "nonpositive anchor rectangle");
+        return;
+    }
+    p->anchor_x = x;
+    p->anchor_y = y;
+    p->anchor_width = width;
+    p->anchor_height = height;
+}
+
+static void
+positioner_anchor (struct wl_client *client, struct wl_resource *resource,
+                   uint32_t anchor)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+
+    if (anchor > XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT)
+        wl_resource_post_error (resource, XDG_POSITIONER_ERROR_INVALID_INPUT,
+                                "invalid anchor");
+    else
+        p->anchor = anchor;
+}
+
+static void
+positioner_gravity (struct wl_client *client, struct wl_resource *resource,
+                    uint32_t gravity)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+
+    if (gravity > XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT)
+        wl_resource_post_error (resource, XDG_POSITIONER_ERROR_INVALID_INPUT,
+                                "invalid gravity");
+    else
+        p->gravity = gravity;
+}
+
+static void
+positioner_adjustment (struct wl_client *client, struct wl_resource *resource,
+                       uint32_t adjustment)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+    const uint32_t allowed = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+                             XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y |
+                             XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+                             XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
+                             XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X |
+                             XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y;
+
+    if (adjustment & ~allowed)
+        wl_resource_post_error (resource, XDG_POSITIONER_ERROR_INVALID_INPUT,
+                                "invalid constraint adjustment");
+    else
+        p->adjustment = adjustment;
+}
+
+static void
+positioner_offset (struct wl_client *client, struct wl_resource *resource,
+                   int32_t x, int32_t y)
+{
+    struct Positioner *p = wl_resource_get_user_data (resource);
+
+    p->offset_x = x;
+    p->offset_y = y;
+}
+
+static const struct xdg_positioner_interface positioner_implementation = {
+    .destroy = positioner_destroy,
+    .set_size = positioner_size,
+    .set_anchor_rect = positioner_rect,
+    .set_anchor = positioner_anchor,
+    .set_gravity = positioner_gravity,
+    .set_constraint_adjustment = positioner_adjustment,
+    .set_offset = positioner_offset,
+};
+
+/* Anchor and gravity use identical edge values in xdg-shell. */
+static const int8_t positioner_edges[][2] = {
+    [XDG_POSITIONER_ANCHOR_NONE] = { 0, 0 },
+    [XDG_POSITIONER_ANCHOR_TOP] = { 0, -1 },
+    [XDG_POSITIONER_ANCHOR_BOTTOM] = { 0, 1 },
+    [XDG_POSITIONER_ANCHOR_LEFT] = { -1, 0 },
+    [XDG_POSITIONER_ANCHOR_RIGHT] = { 1, 0 },
+    [XDG_POSITIONER_ANCHOR_TOP_LEFT] = { -1, -1 },
+    [XDG_POSITIONER_ANCHOR_BOTTOM_LEFT] = { -1, 1 },
+    [XDG_POSITIONER_ANCHOR_TOP_RIGHT] = { 1, -1 },
+    [XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT] = { 1, 1 },
+};
+
+struct PopupAxis
+{
+    int32_t offset, anchor, extent, size;
+    int8_t edge, gravity;
+    Bool flip, slide, resize;
+};
+
+static void
+place_axis (struct PopupAxis axis, int64_t low, int64_t high,
+            int32_t *position, int32_t *size)
+{
+    int64_t start = (int64_t)axis.anchor + axis.offset;
+    int64_t length = axis.size;
+    int64_t pos = start + (axis.edge + 1) * (int64_t)axis.extent / 2 -
+                  (1 - axis.gravity) * length / 2;
+
+    if (axis.flip && (pos < low || pos + length > high))
+    {
+        int64_t flipped = start + (1 - axis.edge) * (int64_t)axis.extent / 2 -
+                          (1 + axis.gravity) * length / 2;
+
+        if (flipped >= low && flipped + length <= high)
+            pos = flipped;
+    }
+    if (axis.slide && pos + length > high)
+        pos = high - length;
+    if (axis.slide && pos < low)
+        pos = low;
+    if (axis.resize && (pos < low || pos + length > high))
+    {
+        int64_t end = min (pos + length, high);
+
+        if (end > max (pos, low))
+        {
+            pos = max (pos, low);
+            length = end - pos;
+        }
+    }
+    *position = max (INT32_MIN, min (INT32_MAX, pos));
+    *size = length;
+}
+
 struct MbXdgSurface
 {
     struct XdgBase *base;
     struct wl_resource *resource;
-    struct wl_resource *toplevel;
+    struct wl_resource *toplevel, *popup;
+    struct MbXdgSurface *popup_parent, *popup_root;
+    struct wl_list popups, popup_link;
+    struct Positioner positioner;
+    int32_t popup_x, popup_y;
+    Bool dismissed;
     MbSurface *surface;
     unsigned int refs;
     struct wl_list configures;
@@ -98,6 +277,8 @@ struct MbXdgSurface
 
 static void wm_message (struct MbXdgSurface *, Atom, CARD32, CARD32, CARD32,
                         CARD32, CARD32, DeviceIntPtr);
+
+static void dismiss_children (struct MbXdgSurface *parent);
 
 static Bool
 apply_bounds (MbSurface *surface, WindowPtr window)
@@ -302,11 +483,11 @@ xdg_destroy (struct wl_client *client, struct wl_resource *resource)
 {
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
 
-    if (xdg->toplevel)
+    if (xdg->toplevel || xdg->popup)
     {
         wl_resource_post_error (xdg->base->resource,
                                 XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
-                                "destroy xdg_toplevel before xdg_surface");
+                                "destroy the xdg role before xdg_surface");
         return;
     }
     wl_resource_destroy (resource);
@@ -315,6 +496,7 @@ xdg_destroy (struct wl_client *client, struct wl_resource *resource)
 static void
 reset_mapping (struct MbXdgSurface *xdg)
 {
+    dismiss_children (xdg);
     reparent_children (xdg);
     xdg->initialized = xdg->configured = xdg->map_requested = FALSE;
     xdg->geometry_set = xdg->frame_extents_set = xdg->anchor_set = FALSE;
@@ -773,7 +955,7 @@ get_toplevel (struct wl_client *client, struct wl_resource *resource,
                                 "wl_surface was destroyed");
         return;
     }
-    if (xdg->toplevel)
+    if (xdg->toplevel || xdg->popup || xdg->dismissed)
     {
         wl_resource_post_error (resource,
                                 XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED,
@@ -793,15 +975,259 @@ get_toplevel (struct wl_client *client, struct wl_resource *resource,
                                     xdg, toplevel_destroyed);
 }
 
+static Bool
+parent_origin (struct MbXdgSurface *parent, int64_t *x, int64_t *y)
+{
+    MbSurface *surface = parent->surface;
+    WindowPtr window =
+        surface ? mb_window_get (&surface->window, DixGetAttrAccess) : NULL;
+
+    if (!window || !window->realized || !parent->map_requested)
+        return FALSE;
+    *x = window->drawable.x + (int64_t)parent->frame_extents[0];
+    *y = window->drawable.y + (int64_t)parent->frame_extents[2];
+    if (parent->popup && parent->geometry_set)
+    {
+        *x += (int64_t)parent->geometry_x - surface->scene_x;
+        *y += (int64_t)parent->geometry_y - surface->scene_y;
+    }
+    return TRUE;
+}
+
 static void
-get_popup (struct wl_client *client, struct wl_resource *resource, uint32_t id,
-           struct wl_resource *parent, struct wl_resource *positioner)
+place_popup (struct MbXdgSurface *xdg, int64_t x, int64_t y, int32_t *width,
+             int32_t *height)
+{
+    const struct Positioner *p = &xdg->positioner;
+    ScreenPtr screen = xdg->surface->window.screen;
+    const struct PopupAxis horizontal = {
+        p->offset_x,
+        p->anchor_x,
+        p->anchor_width,
+        p->width,
+        positioner_edges[p->anchor][0],
+        positioner_edges[p->gravity][0],
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X),
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X),
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X),
+    };
+    const struct PopupAxis vertical = {
+        p->offset_y,
+        p->anchor_y,
+        p->anchor_height,
+        p->height,
+        positioner_edges[p->anchor][1],
+        positioner_edges[p->gravity][1],
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y),
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y),
+        !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y),
+    };
+    int left = 0, top = 0, right = screen->width, bottom = screen->height;
+    rrScrPrivPtr randr = rrGetScrPriv (screen);
+    int64_t anchor_x = x + horizontal.anchor +
+                       (horizontal.edge + 1) * (int64_t)horizontal.extent / 2;
+    int64_t anchor_y = y + vertical.anchor +
+                       (vertical.edge + 1) * (int64_t)vertical.extent / 2;
+
+    if (randr)
+    {
+        int i;
+
+        for (i = 0; i < randr->numOutputs; i++)
+        {
+            RROutputPtr output = randr->outputs[i];
+            RRCrtcPtr crtc = output->crtc;
+            int w, h;
+
+            if (!crtc || !crtc->mode || output->nonDesktop ||
+                output->connection != RR_Connected)
+                continue;
+            RRCrtcGetScanoutSize (crtc, &w, &h);
+            if (anchor_x >= crtc->x && anchor_x < crtc->x + w &&
+                anchor_y >= crtc->y && anchor_y < crtc->y + h)
+            {
+                left = crtc->x;
+                top = crtc->y;
+                right = left + w;
+                bottom = top + h;
+                break;
+            }
+        }
+    }
+    place_axis (horizontal, left - x, right - x, &xdg->popup_x, width);
+    place_axis (vertical, top - y, bottom - y, &xdg->popup_y, height);
+}
+
+static void
+dismiss_popup (struct MbXdgSurface *xdg, Bool notify)
+{
+    WindowPtr window =
+        xdg->surface ? mb_window_get (&xdg->surface->window, DixSetAttrAccess)
+                     : NULL;
+
+    if (xdg->dismissed)
+        return;
+    xdg->dismissed = TRUE;
+    xdg->map_requested = FALSE;
+    wl_list_remove (&xdg->popup_link);
+    wl_list_init (&xdg->popup_link);
+    if (window)
+        UnmapWindow (window, FALSE);
+    if (notify && xdg->popup && xdg->surface && !xdg->surface->client->failed)
+        xdg_popup_send_popup_done (xdg->popup);
+}
+
+static void
+dismiss_children (struct MbXdgSurface *parent)
+{
+    struct MbXdgSurface *root =
+        parent->popup_root ? parent->popup_root : parent;
+    struct MbXdgSurface *popup, *next;
+
+    wl_list_for_each_reverse_safe (popup, next, &root->popups, popup_link)
+    {
+        struct MbXdgSurface *ancestor = popup->popup_parent;
+
+        while (ancestor && ancestor != parent)
+            ancestor = ancestor->popup_parent;
+        if (ancestor)
+            dismiss_popup (popup, TRUE);
+    }
+}
+
+static Bool
+position_popup (struct MbXdgSurface *xdg, WindowPtr window, Bool raise)
+{
+    MbSurface *surface = xdg->surface;
+    XID values[3];
+    int64_t x, y;
+
+    if (!parent_origin (xdg->popup_parent, &x, &y))
+        return TRUE;
+    x += xdg->popup_x + (int64_t)surface->scene_x;
+    y += xdg->popup_y + (int64_t)surface->scene_y;
+    if (xdg->geometry_set)
+    {
+        x -= xdg->geometry_x;
+        y -= xdg->geometry_y;
+    }
+    x = max (INT16_MIN, min (INT16_MAX, x));
+    y = max (INT16_MIN, min (INT16_MAX, y));
+    if (!raise && window->drawable.x == x && window->drawable.y == y)
+        return TRUE;
+    values[0] = (int32_t)x;
+    values[1] = (int32_t)y;
+    values[2] = Above;
+    return ConfigureWindow (window, CWX | CWY | (raise ? CWStackMode : 0),
+                            values, surface->client->native) == Success;
+}
+
+static void
+popup_destroyed (struct wl_resource *resource)
 {
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
 
-    wl_resource_post_error (xdg->base->resource,
-                            XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
-                            "popup roles are unavailable");
+    dismiss_children (xdg);
+    dismiss_popup (xdg, FALSE);
+    xdg->popup = NULL;
+    xdg_unref (xdg->popup_root);
+    xdg->popup_root = NULL;
+    xdg_unref (xdg->popup_parent);
+    xdg->popup_parent = NULL;
+    xdg_unref (xdg);
+}
+
+static void
+popup_destroy (struct wl_client *client, struct wl_resource *resource)
+{
+    struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
+
+    if (!xdg->dismissed && xdg->popup_link.next != &xdg->popup_root->popups)
+    {
+        wl_resource_post_error (xdg->base->resource,
+                                XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
+                                "destroy the topmost popup first");
+        return;
+    }
+    wl_resource_destroy (resource);
+}
+
+static void
+popup_grab (struct wl_client *client, struct wl_resource *resource,
+            struct wl_resource *seat, uint32_t serial)
+{
+    struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
+
+    if (xdg->map_requested)
+        wl_resource_post_error (resource, XDG_POPUP_ERROR_INVALID_GRAB,
+                                "popup already mapped");
+    else
+        dismiss_popup (xdg, TRUE);
+}
+
+static const struct xdg_popup_interface popup_implementation = {
+    .destroy = popup_destroy,
+    .grab = popup_grab,
+};
+
+static void
+get_popup (struct wl_client *client, struct wl_resource *resource, uint32_t id,
+           struct wl_resource *parent_resource, struct wl_resource *positioner)
+{
+    struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
+    struct MbXdgSurface *parent =
+        parent_resource ? wl_resource_get_user_data (parent_resource) : NULL;
+    const struct Positioner *p = wl_resource_get_user_data (positioner);
+    WindowPtr window;
+    XID override = TRUE;
+
+    if (!xdg->surface || xdg->toplevel || xdg->popup || xdg->dismissed)
+    {
+        wl_resource_post_error (resource,
+                                XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED,
+                                "xdg role already exists");
+        return;
+    }
+    if (!parent || parent == xdg || !parent->surface ||
+        (!parent->toplevel && !parent->popup))
+    {
+        wl_resource_post_error (xdg->base->resource,
+                                XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                                "popup requires an xdg parent");
+        return;
+    }
+    if (!p->width || !p->anchor_width)
+    {
+        wl_resource_post_error (xdg->base->resource,
+                                XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                                "incomplete positioner");
+        return;
+    }
+    window = mb_window_get (&xdg->surface->window, DixSetAttrAccess);
+    if (!window ||
+        ChangeWindowAttributes (window, CWOverrideRedirect, &override,
+                                xdg->surface->client->native) != Success)
+    {
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    xdg->popup =
+        wl_resource_create (client, &xdg_popup_interface, XDG_VERSION, id);
+    if (!xdg->popup)
+    {
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    xdg->positioner = *p;
+    xdg->popup_parent = parent;
+    parent->refs++;
+    xdg->popup_root = parent->popup_root ? parent->popup_root : parent;
+    /* Keep the root alive even if an intermediate role is destroyed. */
+    xdg->popup_root->refs++;
+    wl_list_insert (xdg->popup_root->popups.prev, &xdg->popup_link);
+    xdg->refs++;
+    wl_resource_set_implementation (xdg->popup, &popup_implementation, xdg,
+                                    popup_destroyed);
 }
 
 static void
@@ -810,7 +1236,7 @@ set_geometry (struct wl_client *client, struct wl_resource *resource,
 {
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
 
-    if (!xdg->toplevel)
+    if (!xdg->toplevel && !xdg->popup)
     {
         wl_resource_post_error (resource, XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                 "xdg surface requires a role");
@@ -836,7 +1262,7 @@ ack_configure (struct wl_client *client, struct wl_resource *resource,
     struct MbXdgSurface *xdg = wl_resource_get_user_data (resource);
     struct Configure *configure, *next, *match = NULL;
 
-    if (!xdg->toplevel)
+    if (!xdg->toplevel && !xdg->popup)
     {
         wl_resource_post_error (resource, XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                 "xdg surface requires a role");
@@ -923,6 +1349,8 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     xdg->base = base;
     base->refs++;
     base->children++;
+    wl_list_init (&xdg->popups);
+    wl_list_init (&xdg->popup_link);
     xdg->surface = surface;
     xdg->window_id = surface->window.id;
     xdg->owner = surface->client->lifetime;
@@ -961,8 +1389,21 @@ static void
 create_positioner (struct wl_client *client, struct wl_resource *resource,
                    uint32_t id)
 {
-    wl_resource_post_error (resource, XDG_WM_BASE_ERROR_INVALID_POSITIONER,
-                            "popup roles are unavailable");
+    struct Positioner *positioner = calloc (1, sizeof (*positioner));
+    struct wl_resource *positioner_resource =
+        positioner ? wl_resource_create (client, &xdg_positioner_interface,
+                                         XDG_VERSION, id)
+                   : NULL;
+
+    if (!positioner_resource)
+    {
+        free (positioner);
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    wl_resource_set_implementation (positioner_resource,
+                                    &positioner_implementation, positioner,
+                                    positioner_destroyed);
 }
 
 static void
@@ -1017,11 +1458,15 @@ send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
     configure = calloc (1, sizeof (*configure));
     if (!configure)
         return FALSE;
-    if (window &&
-        dixLookupProperty (&property, window, compositor.atoms.net_wm_state,
-                           xdg->surface->client->native,
-                           DixReadAccess) == Success &&
-        property->type == XA_ATOM && property->format == MB_PROPERTY_FORMAT_32)
+    if (xdg->popup)
+        xdg_popup_send_configure (xdg->popup, xdg->popup_x, xdg->popup_y,
+                                  width, height);
+    else if (window &&
+             dixLookupProperty (
+                 &property, window, compositor.atoms.net_wm_state,
+                 xdg->surface->client->native, DixReadAccess) == Success &&
+             property->type == XA_ATOM &&
+             property->format == MB_PROPERTY_FORMAT_32)
     {
         unsigned int i;
         const CARD32 *atoms = property->data;
@@ -1048,7 +1493,8 @@ send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
     xdg->configure_count++;
     xdg->last_width = width;
     xdg->last_height = height;
-    xdg_toplevel_send_configure (xdg->toplevel, width, height, &array);
+    if (xdg->toplevel)
+        xdg_toplevel_send_configure (xdg->toplevel, width, height, &array);
     xdg_surface_send_configure (xdg->resource, configure->serial);
     return TRUE;
 }
@@ -1060,13 +1506,15 @@ mb_xdg_commit (MbSurface *surface)
 
     if (!xdg)
         return TRUE;
-    if (!xdg->toplevel)
+    if (!xdg->toplevel && !xdg->popup)
     {
         wl_resource_post_error (xdg->resource,
                                 XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                 "xdg surface requires a role");
         return FALSE;
     }
+    if (xdg->dismissed)
+        return TRUE;
     if ((surface->pending_buffer || surface->buffer) && !xdg->configured)
     {
         wl_resource_post_error (
@@ -1083,7 +1531,27 @@ mb_xdg_commit (MbSurface *surface)
     }
     if (!xdg->initialized)
     {
-        if (!send_configure (xdg, 0, 0))
+        int32_t width = 0, height = 0;
+
+        if (xdg->popup)
+        {
+            int64_t x, y;
+
+            if (xdg->popup_parent->dismissed)
+            {
+                dismiss_popup (xdg, TRUE);
+                return TRUE;
+            }
+            if (!parent_origin (xdg->popup_parent, &x, &y))
+            {
+                wl_resource_post_error (xdg->base->resource,
+                                        XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                                        "popup parent is not mapped");
+                return FALSE;
+            }
+            place_popup (xdg, x, y, &width, &height);
+        }
+        if (!send_configure (xdg, width, height))
         {
             wl_resource_post_no_memory (xdg->resource);
             return FALSE;
@@ -1133,10 +1601,11 @@ mb_xdg_resize_pending (MbSurface *surface)
 {
     struct MbXdgSurface *xdg = surface->xdg;
 
-    return xdg && (xdg->updating_state ||
-                   (xdg->map_requested && xdg->last_width > 0 &&
-                    xdg->last_height > 0 &&
-                    xdg->last_serial != xdg->committed_serial));
+    return xdg && xdg->toplevel &&
+           (xdg->updating_state ||
+            (xdg->map_requested && xdg->last_width > 0 &&
+             xdg->last_height > 0 &&
+             xdg->last_serial != xdg->committed_serial));
 }
 
 Bool
@@ -1249,12 +1718,62 @@ mb_xdg_map (MbSurface *surface)
     struct MbXdgSurface *xdg = surface->xdg;
     WindowPtr window;
 
-    if (!xdg || !xdg->toplevel)
+    if (!xdg || (!xdg->toplevel && !xdg->popup))
         return TRUE;
     window =
         mb_window_get (&surface->window, DixManageAccess | DixSetAttrAccess);
     if (!window)
         return FALSE;
+    if (xdg->popup)
+    {
+        int64_t parent_x, parent_y;
+
+        if (xdg->dismissed)
+            return TRUE;
+        if (!surface->pixels)
+        {
+            if (xdg->map_requested)
+            {
+                dismiss_children (xdg);
+                dismiss_popup (xdg, FALSE);
+            }
+            return TRUE;
+        }
+        if (!parent_origin (xdg->popup_parent, &parent_x, &parent_y))
+        {
+            dismiss_children (xdg);
+            dismiss_popup (xdg, TRUE);
+            return TRUE;
+        }
+        if (!xdg->map_requested)
+        {
+            struct wl_list *link;
+
+            for (link = xdg->popup_link.next; link != &xdg->popup_root->popups;
+                 link = link->next)
+            {
+                struct MbXdgSurface *other =
+                    wl_container_of (link, other, popup_link);
+
+                if (!other->map_requested)
+                    continue;
+                wl_resource_post_error (
+                    xdg->base->resource,
+                    XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
+                    "a newer popup is already mapped");
+                return TRUE;
+            }
+        }
+        if (!position_popup (xdg, window, !xdg->map_requested))
+            return FALSE;
+        if (!xdg->map_requested)
+        {
+            if (MapWindow (window, surface->client->native) != Success)
+                return FALSE;
+            xdg->map_requested = TRUE;
+        }
+        return TRUE;
+    }
     if (xdg->geometry_set && surface->pixels)
     {
         int64_t x2 = (int64_t)xdg->geometry_x + xdg->geometry_width;
@@ -1360,11 +1879,11 @@ mb_xdg_map (MbSurface *surface)
 Bool
 mb_xdg_surface_destroy_request (MbSurface *surface)
 {
-    if (surface->xdg && surface->xdg->toplevel)
+    if (surface->xdg && (surface->xdg->toplevel || surface->xdg->popup))
     {
         wl_resource_post_error (surface->xdg->base->resource,
                                 XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
-                                "destroy xdg_toplevel before wl_surface");
+                                "destroy the xdg role before wl_surface");
         return FALSE;
     }
     return TRUE;
@@ -1377,6 +1896,9 @@ mb_xdg_surface_destroyed (MbSurface *surface)
 
     if (xdg)
     {
+        dismiss_children (xdg);
+        if (xdg->popup)
+            dismiss_popup (xdg, FALSE);
         reparent_children (xdg);
         xdg->surface = NULL;
         surface->xdg = NULL;
@@ -1391,7 +1913,27 @@ mb_xdg_event (MbSurface *surface, const xEvent *event)
     WindowPtr window;
     unsigned int type = event->u.u.type & ~SEND_EVENT_MASK;
 
-    if (!xdg || !xdg->toplevel)
+    if (!xdg)
+        return;
+    if (type == UnmapNotify)
+        dismiss_children (xdg);
+    if (type == ConfigureNotify && xdg->toplevel)
+    {
+        struct MbXdgSurface *popup;
+        int64_t x, y;
+
+        if (parent_origin (xdg, &x, &y))
+            wl_list_for_each (popup, &xdg->popups, popup_link)
+            {
+                WindowPtr native =
+                    mb_window_get (&popup->surface->window, DixSetAttrAccess);
+
+                if (native && popup->map_requested &&
+                    !position_popup (popup, native, FALSE))
+                    wl_resource_post_no_memory (popup->popup);
+            }
+    }
+    if (!xdg->toplevel)
         return;
     if (type == ClientMessage && event->u.u.detail == MB_PROPERTY_FORMAT_32 &&
         event->u.clientMessage.u.l.type == compositor.atoms.wm_protocols &&
