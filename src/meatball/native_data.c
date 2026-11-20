@@ -537,7 +537,7 @@ offer_actions (struct wl_client *client, struct wl_resource *resource,
     struct DataOffer *offer = wl_resource_get_user_data (resource);
     struct DataDrag *drag = offer->drag;
 
-    if (!offer->active || !drag || offer->finished)
+    if (!offer->drag_offer || offer->finished)
     {
         wl_resource_post_error (resource, WL_DATA_OFFER_ERROR_INVALID_OFFER,
                                 "data offer does not negotiate drag actions");
@@ -552,12 +552,17 @@ offer_actions (struct wl_client *client, struct wl_resource *resource,
     }
     if ((preferred && (preferred & (preferred - 1))) ||
         (preferred & ~actions) ||
-        (drag->dropped && drag->ask && (preferred & ~drag->source->actions)))
+        (drag && drag->dropped && drag->ask &&
+         (preferred & ~drag->source->actions)))
     {
         wl_resource_post_error (resource, WL_DATA_OFFER_ERROR_INVALID_ACTION,
                                 "invalid preferred drag action");
         return;
     }
+    /* Motion can retire an offer before the destination receives leave.
+     * An action reply to that offer no longer participates in negotiation. */
+    if (!offer->active || !drag)
+        return;
     if (drag->dropped && !drag->ask)
         return;
     offer->actions = actions;
