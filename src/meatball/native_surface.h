@@ -77,11 +77,11 @@ struct MbSurface
     struct wl_resource *resource;
     MbClient *client;
     MbSurfaceRole role;
+    unsigned int commit_count;
     struct MbSubsurface *subsurface;
     struct wl_list pending_stack, pending_self;
     MbPlacement *stack;
     size_t stack_count;
-    unsigned int commit_count;
     struct MbXdgSurface *xdg;
     struct MbViewport *viewport;
     MbViewportState crop, pending_crop;
