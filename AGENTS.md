@@ -46,9 +46,10 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 ```
 
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
-The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
-linux-dmabuf, pointer-constraints-unstable-v1, relative-pointer-unstable-v1,
-tearing-control-v1, xdg-system-bell-v1, and single-pixel-buffer-v1.
+The build scans xdg-shell, xdg-output-unstable-v1, viewporter,
+primary-selection-unstable-v1, linux-dmabuf, pointer-constraints-unstable-v1,
+relative-pointer-unstable-v1, tearing-control-v1, xdg-system-bell-v1, and
+single-pixel-buffer-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -335,6 +336,12 @@ and disconnects update existing clients. Screens without RandR output data use
 the native X screen geometry. Separate X screens expose separate output globals;
 surface windows currently use the first X screen.
 
+Version 3 `zxdg_output_manager_v1` exposes each output's logical position
+and rotated size from the same RandR layout as `wl_output`. At scale 1,
+logical dimensions match the output's desktop rectangle. Names and
+descriptions match `wl_output`. Version 3 updates use `wl_output.done`
+when the core binding supports it. Older bindings use `zxdg_output_v1.done`.
+
 Surfaces receive output enter/leave events as their committed content crosses
 output boundaries. This includes subsurfaces, cursor images and cursor children,
 window movement, minimize/restore, and output layout changes. Binding an output
@@ -482,7 +489,8 @@ Every check runs against the isolated module test host.
   pointer-grab transfer to a test WM.
 - `native-outputs` checks output protocol versions, current modes, all RandR
   rotation/reflection combinations, physical metadata, disconnect/reconnect,
-  non-desktop outputs, and multiple X screens.
+  non-desktop outputs, and multiple X screens. It also checks xdg-output
+  logical geometry, metadata, update ordering, and binding lifetimes.
 - `native-output-surfaces` checks membership during movement, minimize/restore,
   synchronized child commits, cursor updates, output binding/removal, and server
   reset.

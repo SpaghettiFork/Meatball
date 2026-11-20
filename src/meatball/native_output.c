@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "server.h"
+#include "xdg-output.h"
 
 #include <randrstr.h>
 #include <stdio.h>
@@ -9,6 +10,9 @@
 #include <wayland-server-protocol.h>
 
 #define OUTPUT_VERSION 4
+#define XDG_OUTPUT_VERSION 3
+#define XDG_OUTPUT_CORE_DONE_SINCE_VERSION 3
+#define XDG_OUTPUT_MUTABLE_DESCRIPTION_SINCE_VERSION 3
 #define OUTPUT_SCALE 1
 #define OUTPUT_LABEL_SIZE 256
 #define OUTPUT_NAME_SIZE 64
@@ -27,6 +31,7 @@ struct OutputState
     int32_t mode_width, mode_height, refresh, subpixel, transform;
     uint32_t flags;
     char model[OUTPUT_LABEL_SIZE];
+    char description[OUTPUT_LABEL_SIZE + OUTPUT_NAME_SIZE];
 };
 
 struct Output
@@ -42,7 +47,7 @@ struct Output
 
 struct OutputResource
 {
-    struct wl_list link, surfaces;
+    struct wl_list link, surfaces, xdg_outputs;
     struct wl_resource *resource;
     struct Output *output;
 };
@@ -57,6 +62,7 @@ struct SurfaceOutput
 struct MbOutputs
 {
     struct wl_list outputs;
+    struct wl_global *xdg_output_global;
 };
 
 static void refresh_surfaces (void);
@@ -90,35 +96,134 @@ static void
 resource_destroyed (struct wl_resource *resource)
 {
     struct OutputResource *binding = wl_resource_get_user_data (resource);
+    struct wl_resource *xdg, *next;
 
+    /* Leave the client objects destroyable after releasing their wl_output. */
+    wl_resource_for_each_safe (xdg, next, &binding->xdg_outputs)
+    {
+        struct wl_list *link = wl_resource_get_link (xdg);
+
+        wl_list_remove (link);
+        wl_list_init (link);
+    }
     clear_memberships (binding, FALSE);
     wl_list_remove (&binding->link);
     free (binding);
 }
 
 static void
-send_state (struct OutputResource *binding, Bool initial)
+send_xdg_state (struct wl_resource *resource, struct OutputResource *binding,
+                const struct OutputState *previous)
+{
+    struct Output *output = binding->output;
+    const struct OutputState *state = &output->state;
+    uint32_t version = wl_resource_get_version (resource);
+    Bool position_changed =
+        !previous || state->x != previous->x || state->y != previous->y;
+    Bool size_changed = !previous || state->width != previous->width ||
+                        state->height != previous->height;
+    Bool description_changed =
+        version >= ZXDG_OUTPUT_V1_DESCRIPTION_SINCE_VERSION &&
+        (!previous ||
+         (version >= XDG_OUTPUT_MUTABLE_DESCRIPTION_SINCE_VERSION &&
+          strcmp (state->description, previous->description)));
+
+    if (position_changed)
+        zxdg_output_v1_send_logical_position (resource, state->x, state->y);
+    if (size_changed)
+        zxdg_output_v1_send_logical_size (resource, state->width,
+                                          state->height);
+    if (!previous && version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION)
+        zxdg_output_v1_send_name (resource, output->name);
+    if (description_changed)
+        zxdg_output_v1_send_description (resource, state->description);
+    /* A version 1 wl_output cannot acknowledge version 3 updates. */
+    if ((position_changed || size_changed || description_changed) &&
+        (version < XDG_OUTPUT_CORE_DONE_SINCE_VERSION ||
+         wl_resource_get_version (binding->resource) <
+             WL_OUTPUT_DONE_SINCE_VERSION))
+        zxdg_output_v1_send_done (resource);
+}
+
+static void
+xdg_output_destroyed (struct wl_resource *resource)
+{
+    wl_list_remove (wl_resource_get_link (resource));
+}
+
+static const struct zxdg_output_v1_interface xdg_output_implementation = {
+    .destroy = release,
+};
+
+static void
+get_xdg_output (struct wl_client *client, struct wl_resource *manager,
+                uint32_t id, struct wl_resource *output)
+{
+    struct OutputResource *binding = wl_resource_get_user_data (output);
+    uint32_t version = wl_resource_get_version (manager);
+    struct wl_resource *resource =
+        wl_resource_create (client, &zxdg_output_v1_interface, version, id);
+
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
+    wl_list_insert (binding->xdg_outputs.prev,
+                    wl_resource_get_link (resource));
+    wl_resource_set_implementation (resource, &xdg_output_implementation, NULL,
+                                    xdg_output_destroyed);
+    send_xdg_state (resource, binding, NULL);
+    if (version >= XDG_OUTPUT_CORE_DONE_SINCE_VERSION &&
+        wl_resource_get_version (output) >= WL_OUTPUT_DONE_SINCE_VERSION)
+        wl_output_send_done (output);
+}
+
+static const struct zxdg_output_manager_v1_interface
+    xdg_manager_implementation = {
+        .destroy = release,
+        .get_xdg_output = get_xdg_output,
+    };
+
+static void
+bind_xdg_manager (struct wl_client *client, void *data, uint32_t version,
+                  uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create (
+        client, &zxdg_output_manager_v1_interface, version, id);
+
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
+    wl_resource_set_implementation (resource, &xdg_manager_implementation,
+                                    NULL, NULL);
+}
+
+static void
+send_state (struct OutputResource *binding, const struct OutputState *previous)
 {
     struct Output *output = binding->output;
     struct OutputState *state = &output->state;
     struct wl_resource *resource = binding->resource;
     uint32_t version = wl_resource_get_version (resource);
-    char description[OUTPUT_LABEL_SIZE + OUTPUT_NAME_SIZE];
+    struct wl_resource *xdg;
 
     wl_output_send_geometry (resource, state->x, state->y, state->mm_width,
                              state->mm_height, state->subpixel, OUTPUT_MAKE,
                              state->model, state->transform);
     wl_output_send_mode (resource, state->flags, state->mode_width,
                          state->mode_height, state->refresh);
-    if (initial && version >= WL_OUTPUT_SCALE_SINCE_VERSION)
+    if (!previous && version >= WL_OUTPUT_SCALE_SINCE_VERSION)
         wl_output_send_scale (resource, OUTPUT_SCALE);
-    if (initial && version >= WL_OUTPUT_NAME_SINCE_VERSION)
+    if (!previous && version >= WL_OUTPUT_NAME_SINCE_VERSION)
         wl_output_send_name (resource, output->name);
     if (version >= WL_OUTPUT_DESCRIPTION_SINCE_VERSION)
+        wl_output_send_description (resource, state->description);
+    wl_resource_for_each (xdg, &binding->xdg_outputs)
     {
-        snprintf (description, sizeof (description), OUTPUT_DESCRIPTION_FORMAT,
-                  output->screen->myNum, state->model);
-        wl_output_send_description (resource, description);
+        send_xdg_state (xdg, binding, previous);
     }
     if (version >= WL_OUTPUT_DONE_SINCE_VERSION)
         wl_output_send_done (resource);
@@ -146,10 +251,11 @@ bind_output (struct wl_client *client, void *data, uint32_t version,
     }
     binding->output = output;
     wl_list_init (&binding->surfaces);
+    wl_list_init (&binding->xdg_outputs);
     wl_list_insert (output->resources.prev, &binding->link);
     wl_resource_set_implementation (binding->resource, &implementation,
                                     binding, resource_destroyed);
-    send_state (binding, TRUE);
+    send_state (binding, NULL);
     refresh_surfaces ();
 }
 
@@ -261,6 +367,8 @@ update_output (ScreenPtr screen, RROutputPtr native, Bool *layout_changed)
         state.flags = WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED;
         snprintf (state.model, sizeof (state.model), "%s", SCREEN_LABEL);
     }
+    snprintf (state.description, sizeof (state.description),
+              OUTPUT_DESCRIPTION_FORMAT, screen->myNum, state.model);
     wl_list_for_each (output, &compositor.outputs->outputs, link)
     {
         if (!output->removed && output->screen == screen && output->id == id)
@@ -291,14 +399,15 @@ update_output (ScreenPtr screen, RROutputPtr native, Bool *layout_changed)
     output->seen = TRUE;
     if (memcmp (&output->state, &state, sizeof (state)))
     {
-        *layout_changed |= output->state.x != state.x ||
-                           output->state.y != state.y ||
-                           output->state.width != state.width ||
-                           output->state.height != state.height;
+        struct OutputState previous = output->state;
+
+        *layout_changed |= previous.x != state.x || previous.y != state.y ||
+                           previous.width != state.width ||
+                           previous.height != state.height;
         output->state = state;
         wl_list_for_each (binding, &output->resources, link)
         {
-            send_state (binding, FALSE);
+            send_state (binding, &previous);
         }
     }
     return TRUE;
@@ -526,6 +635,11 @@ mb_outputs_initialize (void)
     if (!compositor.outputs)
         return FALSE;
     wl_list_init (&compositor.outputs->outputs);
+    compositor.outputs->xdg_output_global = wl_global_create (
+        compositor.wl_display, &zxdg_output_manager_v1_interface,
+        XDG_OUTPUT_VERSION, NULL, bind_xdg_manager);
+    if (!compositor.outputs->xdg_output_global)
+        return FALSE;
     mb_outputs_refresh ();
     return !compositor.bridge_client->failed;
 }
@@ -537,6 +651,8 @@ mb_outputs_shutdown (void)
 
     if (!compositor.outputs)
         return;
+    if (compositor.outputs->xdg_output_global)
+        wl_global_destroy (compositor.outputs->xdg_output_global);
     wl_list_for_each_safe (output, next, &compositor.outputs->outputs, link)
     {
         struct OutputResource *binding, *next_binding;

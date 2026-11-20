@@ -10,6 +10,14 @@ from native_lifecycle import wait_socket
 from wayland_support import Wayland
 
 TEST_INTERFACE = "meatball_output_test"
+XDG_OUTPUT_MANAGER = "zxdg_output_manager_v1"
+GET_XDG_OUTPUT = 1
+XDG_DESTROY = 0
+LOGICAL_POSITION = 0
+LOGICAL_SIZE = 1
+XDG_DONE = 2
+XDG_NAME = 3
+XDG_DESCRIPTION = 4
 GEOMETRY = 0
 MODE = 1
 DONE = 2
@@ -81,18 +89,52 @@ class Outputs(Wayland):
         self.send(self.test, 0, struct.pack("=II", operation, argument & 0xffffffff))
         return self.roundtrip_events() + self.roundtrip_events()
 
+    def bind_xdg_output(self, output, version, position, size, metadata=None,
+                        core_done=True):
+        assert self.globals()[XDG_OUTPUT_MANAGER][1] == 3
+        manager = self.bind(XDG_OUTPUT_MANAGER, version)
+        resource = self.allocate_id()
+        self.send(manager, GET_XDG_OUTPUT, struct.pack("=II", resource, output))
+        self.send(manager, XDG_DESTROY)
+        expected = [(resource, LOGICAL_POSITION, struct.pack("=ii", *position)),
+                    (resource, LOGICAL_SIZE, struct.pack("=ii", *size))]
+        events = [event for event in self.roundtrip_events()
+                  if event[0] in (resource, output)]
+        if version >= 2:
+            assert [string(last(events, resource, opcode))[0]
+                    for opcode in (XDG_NAME, XDG_DESCRIPTION)] == list(metadata)
+            expected += [(resource, opcode, last(events, resource, opcode))
+                         for opcode in (XDG_NAME, XDG_DESCRIPTION)]
+        expected.append((output, DONE, b"") if version >= 3 and core_done
+                        else (resource, XDG_DONE, b""))
+        assert events == expected, events
+        return resource
+
 
 def check_basic(path):
     client = Outputs(path)
     try:
         names = client.outputs()
         assert len(names) == 1, names
+        modern, events = client.bind_output(names[0])
+        metadata = [string(last(events, modern, opcode))[0]
+                    for opcode in (NAME, DESCRIPTION)]
         for version in range(1, 5):
             resource, events = client.bind_output(names[0], version)
             flags, width, height, refresh = struct.unpack("=Iiii", last(events, resource, MODE))
             assert flags & MODE_CURRENT and (width, height) == (128, 128) and refresh >= 0, (flags, width, height, refresh)
             if version >= 3:
                 client.send(resource, OUTPUT_RELEASE)
+            if version == 1:
+                # A legacy core binding cannot receive wl_output.done.
+                xdg = client.bind_xdg_output(resource, 3, (0, 0), (128, 128),
+                                             metadata, core_done=False)
+                client.send(xdg, XDG_DESTROY)
+        for version in range(1, 4):
+            xdg = client.bind_xdg_output(modern, version, (0, 0), (128, 128),
+                                         metadata)
+            client.send(xdg, XDG_DESTROY)
+        client.send(modern, OUTPUT_RELEASE)
         client.sync()
     finally:
         client.close()
@@ -105,20 +147,39 @@ def check_changes(path):
         first_name, = client.outputs()
         first, events = client.bind_output(first_name)
         stable_name, _ = string(last(events, first, NAME))
+        metadata = [stable_name, string(last(events, first, DESCRIPTION))[0]]
+        legacy = client.bind_xdg_output(first, 2, (0, 0), (128, 128), metadata)
+        modern = client.bind_xdg_output(first, 3, (0, 0), (128, 128), metadata)
         events = client.change_outputs(SPLIT)
         assert struct.unpack("=Iiii", last(events, first, MODE)) == (
             MODE_CURRENT | MODE_PREFERRED, WIDTH, HEIGHT, REFRESH)
         assert not any(object_id == first and opcode == NAME for object_id, opcode, _ in events)
+        changes = [event for event in events if event[0] in (legacy, modern)
+                   or event[:2] == (first, DONE)]
+        size = struct.pack("=ii", WIDTH, HEIGHT)
+        assert changes == [(legacy, LOGICAL_SIZE, size), (legacy, XDG_DONE, b""),
+                           (modern, LOGICAL_SIZE, size), (first, DONE, b"")], changes
         second_name, = set(client.outputs()) - {first_name}
         second, events = client.bind_output(second_name)
         assert geometry(last(events, second, GEOMETRY))[:2] == (WIDTH, 0)
         assert string(last(events, second, NAME))[0] != stable_name
+        second_metadata = [string(last(events, second, opcode))[0]
+                           for opcode in (NAME, DESCRIPTION)]
+        client.bind_xdg_output(second, 3, (WIDTH, 0), (WIDTH, HEIGHT),
+                               second_metadata)
         # Expected transforms for rotations with no reflection, X, Y, and both.
         expected_transforms = ((0, 1, 2, 3), (4, 7, 6, 5),
                                (6, 5, 4, 7), (2, 3, 0, 1))
+        previous_size = (WIDTH, HEIGHT)
         for reflection, transforms in zip((0, 16, 32, 48), expected_transforms):
             for rotation, expected in zip((1, 2, 4, 8), transforms):
                 events = client.change_outputs(ROTATION, reflection | rotation)
+                size = (HEIGHT, WIDTH) if rotation in (2, 8) else (WIDTH, HEIGHT)
+                size_events = [data for object_id, opcode, data in events
+                               if (object_id, opcode) == (modern, LOGICAL_SIZE)]
+                assert size_events == ([struct.pack("=ii", *size)]
+                                       if size != previous_size else [])
+                previous_size = size
                 if events and any(object_id == first and opcode == GEOMETRY
                                   for object_id, opcode, _ in events):
                     assert geometry(last(events, first, GEOMETRY))[-1] == expected
@@ -136,8 +197,10 @@ def check_changes(path):
                 assert flags == 0 and expected == REFRESH
         events = client.change_outputs(POSITION, -WIDTH)
         assert geometry(last(events, first, GEOMETRY))[:2] == (-WIDTH, 0)
+        assert struct.unpack("=ii", last(events, modern, LOGICAL_POSITION)) == (-WIDTH, 0)
         events = client.change_outputs(PHYSICAL)
         assert geometry(last(events, first, GEOMETRY))[2:5] == (320, 180, 2)
+        assert not any(event[0] in (legacy, modern) for event in events)
         events = client.change_outputs(CONNECTION, 0)
         assert any(opcode == GLOBAL_REMOVE and struct.unpack("=I", data) == (first_name,)
                    for object_id, opcode, data in events if object_id != client.test)
@@ -155,7 +218,10 @@ def check_changes(path):
         # A removed binding stays valid until the client releases it.
         client.send(first, OUTPUT_RELEASE)
         client.sync()
-        client.change_outputs(CONNECTION, 1)
+        events = client.change_outputs(CONNECTION, 1)
+        assert not any(event[0] in (legacy, modern) for event in events)
+        client.send(legacy, XDG_DESTROY)
+        client.send(modern, XDG_DESTROY)
         replacement_name, = set(client.outputs()) - {second_name}
         assert replacement_name != first_name
         first, events = client.bind_output(replacement_name)
