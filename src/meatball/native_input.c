@@ -1368,7 +1368,7 @@ root_for_window (WindowPtr window)
             if (surface->window.id == window->drawable.id &&
                 surface->role != MB_ROLE_DRAG_ICON &&
                 surface->role != MB_ROLE_CURSOR && window->realized &&
-                surface->pixels && mb_subsurface_root (surface) == surface)
+                surface->content && mb_subsurface_root (surface) == surface)
                 return surface;
         }
         window = window->parent;
@@ -1533,7 +1533,7 @@ drag_position (MbSurface *root, ScreenPtr screen, double x, double y,
     WindowPtr window =
         root ? mb_window_get (&root->window, DixGetAttrAccess) : NULL;
 
-    if (window && window->realized && root->pixels)
+    if (window && window->realized && root->content)
         position.surface =
             hit_surface (root, x - window->drawable.x + root->scene_x,
                          y - window->drawable.y + root->scene_y, NULL,
@@ -2176,7 +2176,7 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
         {
             WindowPtr window = mb_window_get (&root->window, DixGetAttrAccess);
 
-            if (!window || !window->realized || !root->pixels)
+            if (!window || !window->realized || !root->content)
                 return;
             seat->modifiers = (struct Modifiers){
                 event->mods.base_mods, event->mods.latched_mods,
@@ -2455,7 +2455,7 @@ mb_input_dispatch (void)
         {
             window = mb_window_get (&seat->keyboard_focus->window,
                                     DixGetAttrAccess);
-            if (!window || !window->realized || !seat->keyboard_focus->pixels)
+            if (!window || !window->realized || !seat->keyboard_focus->content)
                 keyboard_focus (seat, NULL, NULL);
         }
         update_constraint (seat);

@@ -324,7 +324,7 @@ apply_bounds (MbSurface *surface, WindowPtr window)
     struct MbXdgSurface *xdg = surface->xdg;
     RegionPtr bounds = NULL;
 
-    if (xdg && xdg->geometry_set && surface->pixels)
+    if (xdg && xdg->geometry_set && surface->content)
     {
         Selection *selection;
         int result =
@@ -732,7 +732,7 @@ interactive (struct MbXdgSurface *xdg, struct wl_resource *seat,
 {
     MbInteractiveGrab grab;
 
-    if (!xdg || !xdg->map_requested || !xdg->surface->pixels ||
+    if (!xdg || !xdg->map_requested || !xdg->surface->content ||
         !mb_input_take_grab (xdg->surface, seat, serial, &grab))
         return;
     wm_message (xdg, compositor.atoms.net_wm_moveresize, grab.x, grab.y,
@@ -1493,7 +1493,7 @@ get_xdg_surface (struct wl_client *client, struct wl_resource *resource,
     char selection_name[sizeof (COMPOSITOR_SELECTION_FORMAT) +
                         sizeof (int) * CHAR_BIT];
 
-    if (surface->xdg || surface->buffer || surface->pending_buffer ||
+    if (surface->xdg || surface->content || surface->pending_buffer ||
         surface->role == MB_ROLE_SUBSURFACE)
     {
         wl_resource_post_error (resource,
@@ -1718,7 +1718,7 @@ mb_xdg_commit (MbSurface *surface)
     }
     if (xdg->dismissed)
         return TRUE;
-    if ((surface->pending_buffer || surface->buffer) && !xdg->configured)
+    if ((surface->pending_buffer || surface->content) && !xdg->configured)
     {
         wl_resource_post_error (
             xdg->resource, XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER,
@@ -1835,7 +1835,7 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
     int result;
 
     *anchor_x = *anchor_y = 0;
-    if (!xdg || !xdg->geometry_set || !surface->pixels)
+    if (!xdg || !xdg->geometry_set || !surface->content)
         return TRUE;
     window = mb_window_get (&surface->window, DixGetPropAccess);
     if (!window)
@@ -1898,7 +1898,7 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
                 continue;
             /* A frame shadow can surround the content on all sides
              * and still take input in its resize margins. */
-            if (node->buffer->render_format == PICT_a8r8g8b8 &&
+            if (node->content->buffer->render_format == PICT_a8r8g8b8 &&
                 iterator.x < 0 && iterator.y < 0 &&
                 iterator.x + node->width > surface->width &&
                 iterator.y + node->height > surface->height)
@@ -1943,7 +1943,7 @@ mb_xdg_map (MbSurface *surface)
 
         if (xdg->dismissed)
             return TRUE;
-        if (!surface->pixels)
+        if (!surface->content)
         {
             if (xdg->map_requested)
             {
@@ -1991,7 +1991,7 @@ mb_xdg_map (MbSurface *surface)
         refresh_popup_children (xdg);
         return TRUE;
     }
-    if (xdg->geometry_set && surface->pixels)
+    if (xdg->geometry_set && surface->content)
     {
         int64_t x2 = (int64_t)xdg->geometry_x + xdg->geometry_width;
         int64_t y2 = (int64_t)xdg->geometry_y + xdg->geometry_height;
@@ -2071,7 +2071,7 @@ mb_xdg_map (MbSurface *surface)
             return FALSE;
         xdg->hints_changed = FALSE;
     }
-    if (surface->pixels && !xdg->map_requested)
+    if (surface->content && !xdg->map_requested)
     {
         CARD32 hints[MOTIF_HINT_WORDS] = {
             [MOTIF_HINT_FLAGS] = MOTIF_HINT_DECORATIONS,
@@ -2089,7 +2089,7 @@ mb_xdg_map (MbSurface *surface)
             return FALSE;
         xdg->map_requested = TRUE;
     }
-    else if (!surface->pixels && xdg->map_requested)
+    else if (!surface->content && xdg->map_requested)
         reset_mapping (xdg);
     return TRUE;
 }

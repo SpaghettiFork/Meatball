@@ -74,7 +74,7 @@ mb_subsurface_root (MbSurface *surface)
 MbSurface *
 mb_scene_next (MbSceneIterator *iterator)
 {
-    while (iterator->surface && iterator->surface->pixels)
+    while (iterator->surface && iterator->surface->content)
     {
         MbSurface *surface = iterator->surface;
         struct MbSubsurface *subsurface;
@@ -102,7 +102,7 @@ mb_scene_next (MbSceneIterator *iterator)
             return surface;
         if (!subsurface->resource || !subsurface->surface ||
             subsurface->parent != surface || !subsurface->active ||
-            !subsurface->surface->pixels)
+            !subsurface->surface->content)
             continue;
         iterator->x += placement->x;
         iterator->y += placement->y;
