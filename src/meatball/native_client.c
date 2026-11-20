@@ -317,7 +317,9 @@ clients_ready (int fd, int ready, void *data)
             client->length -= size;
             memmove (client->bytes, client->bytes + size, client->length);
             remaining--;
-            if (client->output)
+            if ((client != compositor.bridge_client ||
+                 !mb_dmabuf_dri3_reply (client, message, size)) &&
+                client->output)
                 client->output (client, message, size);
             free (message);
         }

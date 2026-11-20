@@ -10,8 +10,10 @@
 #include <xf86Optionstr.h>
 
 #ifdef DRI3
+#include <dixstruct.h>
 #include <dri3.h>
 #include <drm_fourcc.h>
+#include <fcntl.h>
 #include <shmint.h>
 #endif
 
@@ -26,6 +28,43 @@ extern void __wrap_InitExtensions (int argc, char **argv);
 #ifdef DRI3
 #define TEST_DRI3_ENV "MEATBALL_TEST_DRI3"
 #define TEST_DRI3_DRIVER_VERSION 2
+#define TEST_DRI3_NO_DEVICE "no-device"
+#define TEST_DRI3_ASYNC "async"
+#define TEST_DEVICE "/dev/null"
+
+static Bool
+test_dri3_open_ready (ClientPtr client, void *data)
+{
+    if (!client->clientGone)
+    {
+        int fd = open (TEST_DEVICE, O_RDWR | O_CLOEXEC);
+
+        if (fd < 0 || dri3_send_open_reply (client, fd) != Success)
+            FatalError ("meatball-test: failed to send DRI3 open reply\n");
+        AttendClient (client);
+    }
+    return TRUE;
+}
+
+static int
+test_dri3_open (ClientPtr client, ScreenPtr screen, RRProviderPtr provider,
+                int *fd)
+{
+    const char *mode = getenv (TEST_DRI3_ENV);
+
+    if (strcmp (mode, TEST_DRI3_NO_DEVICE) == 0)
+        return BadMatch;
+    if (strcmp (mode, TEST_DRI3_ASYNC) == 0)
+    {
+        if (!QueueWorkProc (test_dri3_open_ready, client, NULL))
+            return BadAlloc;
+        IgnoreClient (client);
+        return Success;
+    }
+    /* A character device stands in for DRM so feedback can be checked. */
+    *fd = open (TEST_DEVICE, O_RDWR | O_CLOEXEC);
+    return *fd < 0 ? BadAlloc : Success;
+}
 
 static int
 test_dri3_formats (ScreenPtr screen, CARD32 *count, CARD32 **formats)
@@ -73,6 +112,7 @@ test_dri3_import (ScreenPtr screen, CARD8 count, const int *fds, CARD16 width,
 
 static const dri3_screen_info_rec test_dri3 = {
     .version = TEST_DRI3_DRIVER_VERSION,
+    .open_client = test_dri3_open,
     .pixmap_from_fds = test_dri3_import,
     .get_formats = test_dri3_formats,
     .get_modifiers = test_dri3_modifiers,

@@ -1,13 +1,16 @@
 """Check linux-dmabuf with the isolated X server's test-only DRI3 driver."""
 
+import fcntl
+import mmap
 import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
+import time
 
-from host_support import connect_x11, server
-from native_lifecycle import wait_socket
+from host_support import STARTUP_TIMEOUT, connect_x11, server
+from native_lifecycle import POLL_INTERVAL, wait_socket
 from native_shm import (COLORS, HEIGHT, WIDTH, BYTES_PER_PIXEL, wait_pixels,
                         RGB565_PIXELS, RGB16_EXPECTED, RGB16_BYTES)
 from native_surfaces import query_tree, root_window
@@ -32,6 +35,7 @@ PLANE_SET = 2
 INCOMPLETE = 3
 INVALID_DIMENSIONS = 5
 OUT_OF_BOUNDS = 6
+INVALID_FORMAT = 4
 INVALID_WL_BUFFER = 7
 Y_INVERT = 1
 INTERLACED = 2
@@ -41,6 +45,20 @@ RGB565 = int.from_bytes(b"RG16", "little")
 LINEAR = 0
 IMPLICIT = (1 << 56) - 1
 FORMAT_MODIFIER_VERSION = 3
+FEEDBACK_VERSION = 4
+DEFAULT_FEEDBACK = 2
+SURFACE_FEEDBACK = 3
+FEEDBACK_DESTROY = 0
+FEEDBACK_DONE = 0
+FEEDBACK_TABLE = 1
+FEEDBACK_MAIN_DEVICE = 2
+FEEDBACK_TRANCHE_DONE = 3
+FEEDBACK_TARGET_DEVICE = 4
+FEEDBACK_FORMATS = 5
+FEEDBACK_FLAGS = 6
+FEEDBACK_ENTRY = struct.Struct("=IIQ")
+TEST_DEVICE = "/dev/null"
+ADVERTISED_PAIRS = {(RGB, LINEAR), (ARGB, LINEAR), (RGB565, LINEAR), (RGB, IMPLICIT)}
 STRIDE = WIDTH * BYTES_PER_PIXEL
 OFFSET = BYTES_PER_PIXEL
 SIZE = OFFSET + STRIDE * HEIGHT
@@ -75,20 +93,69 @@ def buffer_release(client, buffer):
             return
 
 
-def check_import(path, display, fd):
+def check_feedback(client, manager):
+    events = client.roundtrip_events()
+    assert not any(obj == manager for obj, _, _ in events)
+    for request, args in ((DEFAULT_FEEDBACK, ()), (SURFACE_FEEDBACK, (client.surface,))):
+        feedback = client.allocate_id()
+        client.send(manager, request, struct.pack(f"={1 + len(args)}I", feedback, *args))
+        events = [(opcode, data) for obj, opcode, data in client.roundtrip_events()
+                  if obj == feedback]
+        assert [opcode for opcode, _ in events] == [
+            FEEDBACK_TABLE, FEEDBACK_MAIN_DEVICE, FEEDBACK_TARGET_DEVICE,
+            FEEDBACK_FLAGS, FEEDBACK_FORMATS, FEEDBACK_TRANCHE_DONE, FEEDBACK_DONE]
+        size, = struct.unpack("=I", events[0][1])
+        fd = client.fds.pop(0)
+        try:
+            assert size == len(ADVERTISED_PAIRS) * FEEDBACK_ENTRY.size
+            seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW
+            assert fcntl.fcntl(fd, fcntl.F_GET_SEALS) & seals == seals
+            with mmap.mmap(fd, size, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ) as table:
+                entries = []
+                for format, padding, modifier in FEEDBACK_ENTRY.iter_unpack(table):
+                    assert padding == 0
+                    entries.append((format, modifier))
+            device = os.stat(TEST_DEVICE).st_rdev
+            for _, payload in events[1:3]:
+                length, = struct.unpack_from("=I", payload)
+                assert length == struct.calcsize("@Q")
+                assert int.from_bytes(payload[4:4 + length], sys.byteorder) == device
+            assert events[3][1] == struct.pack("=I", 0)
+            indices = events[4][1]
+            byte_count, = struct.unpack_from("=I", indices)
+            assert byte_count == len(entries) * struct.calcsize("=H")
+            indices = struct.unpack_from(f"={len(entries)}H", indices, 4)
+            assert {entries[i] for i in indices} == ADVERTISED_PAIRS
+        finally:
+            os.close(fd)
+        client.send(feedback, FEEDBACK_DESTROY)
+    client.sync()
+
+
+def check_import(path, display, fd, version):
     observer, setup = connect_x11(display, return_setup=True)
     root = root_window(setup)
     before = query_tree(observer, root)
     client = XdgClient(path)
     try:
         window, = query_tree(observer, root) - before
-        assert client.globals()[INTERFACE][1] == FORMAT_MODIFIER_VERSION
-        manager = client.bind(INTERFACE)
+        deadline = time.monotonic() + STARTUP_TIMEOUT
+        while client.globals()[INTERFACE][1] != version:
+            assert time.monotonic() < deadline, "DMA-BUF feedback version did not settle"
+            time.sleep(POLL_INTERVAL)
+        manager = client.bind(INTERFACE, version)
+        if version >= FEEDBACK_VERSION:
+            check_feedback(client, manager)
+            modifier_manager = client.bind(INTERFACE, FORMAT_MODIFIER_VERSION)
+        else:
+            modifier_manager = manager
         events = client.roundtrip_events()
-        assert {struct.unpack("=III", data) for obj, opcode, data in events
-                if obj == manager and opcode == MODIFIER} == {
-                    (RGB, 0, LINEAR), (ARGB, 0, LINEAR), (RGB565, 0, LINEAR),
-                    (RGB, IMPLICIT >> 32, IMPLICIT & 0xffffffff)}
+        advertised = set()
+        for obj, opcode, data in events:
+            if obj == modifier_manager and opcode == MODIFIER:
+                format, high, low = struct.unpack("=III", data)
+                advertised.add((format, high << 32 | low))
+        assert advertised == ADVERTISED_PAIRS
         legacy = client.bind(INTERFACE, 1)
         formats = [struct.unpack("=I", data)[0]
                    for obj, opcode, data in client.roundtrip_events()
@@ -157,7 +224,7 @@ def check_import(path, display, fd):
         observer.close()
 
 
-def check_failures(path, fd):
+def check_failures(path, fd, version):
     client = Wayland(path)
     try:
         manager = client.bind(INTERFACE)
@@ -175,7 +242,8 @@ def check_failures(path, fd):
             ("used", ALREADY_USED), ("index", PLANE_IDX),
             ("duplicate", PLANE_SET), ("missing", INCOMPLETE),
             ("extent", OUT_OF_BOUNDS), ("dimensions", INVALID_DIMENSIONS),
-            ("modifier", INVALID_WL_BUFFER)):
+            ("modifier", INVALID_FORMAT if version >= FEEDBACK_VERSION
+                         else INVALID_WL_BUFFER)):
         client = Wayland(path)
         try:
             manager = client.bind(INTERFACE)
@@ -220,14 +288,16 @@ def main():
         fd = os.memfd_create("meatball-dmabuf-test", os.MFD_CLOEXEC)
         try:
             os.ftruncate(fd, SIZE)
-            os.pwrite(fd, struct.pack(f"={len(COLORS)}I", *COLORS), OFFSET)
-            with server(host, module, {"MEATBALL_TEST_SOCKET": str(path),
-                                       "MEATBALL_TEST_DRI3": "1"},
-                        arguments=["-pixdepths", "16"]) as (process, display):
-                wait_socket(path, process)
-                check_import(path, display, fd)
-                check_failures(path, fd)
-                assert process.poll() is None
+            for mode, version in (("no-device", FORMAT_MODIFIER_VERSION),
+                                  ("1", FEEDBACK_VERSION), ("async", FEEDBACK_VERSION)):
+                os.pwrite(fd, struct.pack(f"={len(COLORS)}I", *COLORS), OFFSET)
+                with server(host, module, {"MEATBALL_TEST_SOCKET": str(path),
+                                           "MEATBALL_TEST_DRI3": mode},
+                            arguments=["-pixdepths", "16"]) as (process, display):
+                    wait_socket(path, process)
+                    check_import(path, display, fd, version)
+                    check_failures(path, fd, version)
+                    assert process.poll() is None
         finally:
             os.close(fd)
 
