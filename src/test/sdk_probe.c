@@ -20,6 +20,12 @@ __attribute__ ((
 __attribute__ ((used)) static __typeof__ (&present_pixmap) present_buffer =
     present_pixmap;
 __attribute__ ((
+    used)) static __typeof__ (&present_notify_msc) present_refresh =
+    present_notify_msc;
+__attribute__ ((
+    used)) static __typeof__ (&present_select_input) present_events =
+    present_select_input;
+__attribute__ ((
     used)) static __typeof__ (&shm_create_pixmap_from_fd) import_shm =
     shm_create_pixmap_from_fd;
 __attribute__ ((used)) static __typeof__ (&RRLeaseCreate) create_lease =

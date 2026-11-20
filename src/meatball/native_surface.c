@@ -3,15 +3,22 @@
 #include "server.h"
 
 #include <X11/extensions/shapeconst.h>
+#include <extnsionst.h>
 #include <limits.h>
 #include <pixmapstr.h>
+#include <present.h>
 #include <stdlib.h>
 #include <wayland-server-protocol.h>
 #include <window.h>
 
 #define FRAME_DELAY_MS 16
+#define PRESENT_TIMEOUT_MS 1500
+#define PRESENT_EVERY_REFRESH 1
+#define MICROSECONDS_PER_MILLISECOND 1000
 #define SEND_EVENT_MASK 0x80
 #define SURFACE_COMMIT_LIMIT 256
+
+static CARD32 next_frame_serial;
 
 static Bool apply_input (MbSurface *surface, WindowPtr native);
 
@@ -19,6 +26,7 @@ struct Frame
 {
     struct wl_list link;
     struct wl_resource *resource;
+    CARD32 serial;
 };
 
 static void
@@ -65,64 +73,127 @@ mb_surface_commit_free (MbSurfaceCommit *commit)
     free (commit);
 }
 
-static int
-frame_ready (void *data)
+static Bool schedule_frames (MbSurface *surface, WindowPtr window);
+
+static void
+complete_frames (MbSurface *surface, CARD32 time)
 {
-    MbSurface *surface = data;
     struct Frame *frame, *next;
     WindowPtr window = mb_window_get (&surface->window, DixGetAttrAccess);
     MbSceneIterator iterator = { .root = surface, .surface = surface };
     MbSurface *node;
+    CARD32 serial = surface->frame_serial;
 
-    surface->frame_timer_armed = FALSE;
+    surface->frame_serial = 0;
+    surface->present_pending = FALSE;
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
         !surface->pixels || mb_subsurface_root (surface) != surface)
-        return 0;
+        return;
     while ((node = mb_scene_next (&iterator)))
     {
         wl_list_for_each_safe (frame, next, &node->frames, link)
         {
-            wl_callback_send_done (frame->resource, GetTimeInMillis ());
+            if (frame->serial != serial)
+                continue;
+            wl_callback_send_done (frame->resource, time);
             wl_resource_destroy (frame->resource);
         }
     }
+    if (!schedule_frames (surface, window))
+        wl_resource_post_no_memory (surface->resource);
+}
+
+static int
+frame_ready (void *data)
+{
+    MbSurface *surface = data;
+
+    if (surface->present_pending)
+        surface->present_disabled = TRUE;
+    complete_frames (surface, GetTimeInMillis ());
     return 0;
+}
+
+static Bool
+schedule_frames (MbSurface *surface, WindowPtr window)
+{
+    MbSceneIterator iterator = { .root = surface, .surface = surface };
+    MbSurface *node;
+    ExtensionEntry *present;
+    CARD32 serial = 0;
+
+    if (surface->frame_serial)
+        return TRUE;
+    while ((node = mb_scene_next (&iterator)))
+    {
+        struct Frame *frame;
+
+        wl_list_for_each (frame, &node->frames, link)
+        {
+            if (!serial)
+            {
+                if (++next_frame_serial == 0)
+                    ++next_frame_serial;
+                serial = next_frame_serial;
+            }
+            frame->serial = serial;
+        }
+    }
+    if (!serial)
+        return TRUE;
+    if (!surface->frame_timer)
+        surface->frame_timer = wl_event_loop_add_timer (
+            compositor.wl_event_loop, frame_ready, surface);
+    if (!surface->frame_timer)
+        return FALSE;
+    surface->frame_serial = serial;
+
+    /* Cursor images have no mapped drawable on which to wait for MSC. */
+    present = window->realized && !surface->present_disabled
+                  ? CheckExtension (PRESENT_NAME)
+                  : NULL;
+    if (present && !surface->present_event)
+    {
+        ClientPtr client = surface->client->native;
+        XID event = FakeClientID (client->index);
+
+        if (present_select_input (client, event, window,
+                                  PresentCompleteNotifyMask) == Success)
+        {
+            surface->present_event = event;
+            surface->present_opcode = present->base;
+        }
+        else
+            surface->present_disabled = TRUE;
+    }
+    if (!surface->present_disabled && present && surface->present_event)
+    {
+        /* With a divisor of one, NotifyMSC targets the next refresh. */
+        if (present_notify_msc (window, serial, 0, PRESENT_EVERY_REFRESH, 0) ==
+            Success)
+            surface->present_pending = TRUE;
+        else
+            surface->present_disabled = TRUE;
+    }
+    return wl_event_source_timer_update (surface->frame_timer,
+                                         surface->present_pending
+                                             ? PRESENT_TIMEOUT_MS
+                                             : FRAME_DELAY_MS) == 0;
 }
 
 static Bool
 redraw (MbSurface *surface)
 {
     WindowPtr window;
-    MbSceneIterator iterator;
-    MbSurface *node;
-    Bool frames = FALSE;
 
     surface = mb_subsurface_root (surface);
     if (!surface)
         return TRUE;
     window = mb_window_get (&surface->window, DixGetAttrAccess);
-
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
         !surface->pixels)
         return TRUE;
-    if (!mb_surface_redraw (surface))
-        return FALSE;
-    iterator = (MbSceneIterator){ .root = surface, .surface = surface };
-    while ((node = mb_scene_next (&iterator)))
-        if (!wl_list_empty (&node->frames))
-            frames = TRUE;
-    if (!surface->frame_timer_armed && frames)
-    {
-        if (!surface->frame_timer)
-            surface->frame_timer = wl_event_loop_add_timer (
-                compositor.wl_event_loop, frame_ready, surface);
-        if (!surface->frame_timer ||
-            wl_event_source_timer_update (surface->frame_timer,
-                                          FRAME_DELAY_MS) < 0)
-            return FALSE;
-        surface->frame_timer_armed = TRUE;
-    }
-    return TRUE;
+    return mb_surface_redraw (surface) && schedule_frames (surface, window);
 }
 
 static void
@@ -132,6 +203,29 @@ surface_output (MbClient *client, const void *message, size_t size)
     MbSurface *surface;
     XID window;
 
+    if (size == sz_xPresentCompleteNotify && event->u.u.type == GenericEvent)
+    {
+        const xPresentCompleteNotify *complete = message;
+
+        if (complete->evtype != PresentCompleteNotify ||
+            complete->kind != PresentCompleteKindNotifyMSC)
+            return;
+        wl_list_for_each (surface, &compositor.surfaces, link)
+        {
+            if (surface->client == client && surface->present_pending &&
+                surface->window.id == complete->window &&
+                surface->present_opcode == complete->extension &&
+                surface->present_event == complete->eid &&
+                surface->frame_serial == complete->serial)
+            {
+                wl_event_source_timer_update (surface->frame_timer, 0);
+                complete_frames (surface,
+                                 complete->ust / MICROSECONDS_PER_MILLISECOND);
+                return;
+            }
+        }
+        return;
+    }
     if (size != sizeof (*event))
         return;
     switch (event->u.u.type & ~SEND_EVENT_MASK)
