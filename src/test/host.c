@@ -31,7 +31,8 @@ static int
 test_dri3_formats (ScreenPtr screen, CARD32 *count, CARD32 **formats)
 {
     static const CARD32 supported[] = { DRM_FORMAT_XRGB8888,
-                                        DRM_FORMAT_ARGB8888 };
+                                        DRM_FORMAT_ARGB8888,
+                                        DRM_FORMAT_RGB565 };
 
     *formats = malloc (sizeof (supported));
     if (!*formats)

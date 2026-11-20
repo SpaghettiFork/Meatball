@@ -13,7 +13,6 @@ surface_picture (MbSurface *surface)
     PixmapPtr pixels;
     PicturePtr source;
     PictFormatPtr source_format;
-    CARD32 format;
     pixman_f_transform_t sampling = {
         .m = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 1 } }
     };
@@ -29,10 +28,9 @@ surface_picture (MbSurface *surface)
                                  surface->client->native,
                                  DixReadAccess) != Success)
         return NULL;
-    format = pixels->drawable.depth == MB_SHM_ARGB_DEPTH ? PICT_a8r8g8b8
-                                                         : PICT_x8r8g8b8;
-    source_format = PictureMatchFormat (surface->window.screen,
-                                        pixels->drawable.depth, format);
+    source_format =
+        PictureMatchFormat (surface->window.screen, pixels->drawable.depth,
+                            surface->buffer->render_format);
     if (!source_format)
         return NULL;
     source = CreatePicture (FakeClientID (surface->client->native->index),

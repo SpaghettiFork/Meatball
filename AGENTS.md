@@ -171,10 +171,15 @@ limited to 32767 in each direction.
 Version 1 `wp_viewporter` supports cropping and destination sizing, including
 fractional source rectangles.
 
+SHM additionally advertises RGB565 and XRGB1555 when the first X screen has
+the corresponding Render formats. Packed 16-bit rows are copied into
+X-aligned pixmaps before drawing.
+
 Version 3 of `zwp_linux_dmabuf_v1` is available when the first X screen reports
-DRI3 modifiers for XRGB8888 or ARGB8888. Meatball advertises those format and
-modifier pairs and uses DRI3 to import the planes for both buffer creation
-requests. Progressive buffers support Y inversion. Commits take a CPU
+DRI3 modifiers for XRGB8888, ARGB8888, or RGB565. Meatball advertises those
+format and modifier pairs and uses DRI3 to import the planes for both buffer
+creation requests. XRGB1555 DMA-BUF needs exact format discovery and import
+support in Spaghetti. Progressive buffers support Y inversion. Commits take a CPU
 readback into a server-owned pixmap before releasing the client buffer, so
 the client can reuse its storage while the window retains its pixels.
 The current version does not provide device feedback or zero-copy rendering.
@@ -334,8 +339,8 @@ Every check runs against the isolated module test host.
   that ownership and mode changes apply to the original socket inode.
 - `native-surfaces` checks surface windows, copied input regions, pending
   callbacks, destruction, and reset cleanup.
-- `native-shm` checks imports, wide strides, buffer release, pixel readback, and
-  redraws after the client reuses its storage.
+- `native-shm` checks 32-bit and 16-bit imports, wide and packed strides,
+  buffer release, pixel readback, and redraws after the client reuses its storage.
 - `native-dmabuf` checks modifier advertisements, both buffer creation
   requests, rejected parameters, buffer release and reuse, Y inversion, and
   the absence of the global without DRI3. A test-only Xvfb DRI3 driver imports

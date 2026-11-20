@@ -8,7 +8,8 @@ import tempfile
 
 from host_support import connect_x11, server
 from native_lifecycle import wait_socket
-from native_shm import COLORS, HEIGHT, WIDTH, BYTES_PER_PIXEL, wait_pixels
+from native_shm import (COLORS, HEIGHT, WIDTH, BYTES_PER_PIXEL, wait_pixels,
+                        RGB565_PIXELS, RGB16_EXPECTED, RGB16_BYTES)
 from native_surfaces import query_tree, root_window
 from native_xdg import XdgClient
 from wayland_support import Wayland, WaylandProtocolError
@@ -36,6 +37,7 @@ Y_INVERT = 1
 INTERLACED = 2
 RGB = int.from_bytes(b"XR24", "little")
 ARGB = int.from_bytes(b"AR24", "little")
+RGB565 = int.from_bytes(b"RG16", "little")
 LINEAR = 0
 IMPLICIT = (1 << 56) - 1
 FORMAT_MODIFIER_VERSION = 3
@@ -85,7 +87,7 @@ def check_import(path, display, fd):
         events = client.roundtrip_events()
         assert {struct.unpack("=III", data) for obj, opcode, data in events
                 if obj == manager and opcode == MODIFIER} == {
-                    (RGB, 0, LINEAR), (ARGB, 0, LINEAR),
+                    (RGB, 0, LINEAR), (ARGB, 0, LINEAR), (RGB565, 0, LINEAR),
                     (RGB, IMPLICIT >> 32, IMPLICIT & 0xffffffff)}
         legacy = client.bind(INTERFACE, 1)
         formats = [struct.unpack("=I", data)[0]
@@ -136,6 +138,20 @@ def check_import(path, display, fd):
         # This time the source buffer carries alpha.
         flipped = changed[WIDTH:] + changed[:WIDTH]
         wait_pixels(observer, window, flipped)
+
+        os.pwrite(fd, struct.pack(f"={len(RGB565_PIXELS)}H", *RGB565_PIXELS), OFFSET)
+        params = new_params(client, manager)
+        add(client, params, fd, stride=WIDTH * RGB16_BYTES)
+        buffer = client.allocate_id()
+        client.send(params, PARAMS_CREATE_IMMED,
+                    struct.pack("=IiiII", buffer, WIDTH, HEIGHT, RGB565, 0))
+        client.send(params, PARAMS_DESTROY)
+        frame = client.frame()
+        client.attach(buffer)
+        client.commit()
+        buffer_release(client, buffer)
+        client.frame_done(frame)
+        wait_pixels(observer, window, RGB16_EXPECTED)
     finally:
         client.close()
         observer.close()
@@ -206,7 +222,8 @@ def main():
             os.ftruncate(fd, SIZE)
             os.pwrite(fd, struct.pack(f"={len(COLORS)}I", *COLORS), OFFSET)
             with server(host, module, {"MEATBALL_TEST_SOCKET": str(path),
-                                       "MEATBALL_TEST_DRI3": "1"}) as (process, display):
+                                       "MEATBALL_TEST_DRI3": "1"},
+                        arguments=["-pixdepths", "16"]) as (process, display):
                 wait_socket(path, process)
                 check_import(path, display, fd)
                 check_failures(path, fd)

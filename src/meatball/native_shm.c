@@ -5,8 +5,10 @@
 #include <errno.h>
 #include <extnsionst.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <picturestr.h>
 #include <pixmapstr.h>
+#include <servermd.h>
 #include <shmint.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -26,10 +28,26 @@ struct MbShmPool
 
 typedef struct
 {
+    uint32_t wire_format;
+    CARD32 render_format;
+    unsigned int depth, bpp;
+} ShmFormat;
+
+static const ShmFormat formats[] = {
+    { WL_SHM_FORMAT_ARGB8888, PICT_a8r8g8b8, MB_SHM_ARGB_DEPTH,
+      MB_SHM_BITS_PER_PIXEL },
+    { WL_SHM_FORMAT_XRGB8888, PICT_x8r8g8b8, MB_SHM_XRGB_DEPTH,
+      MB_SHM_BITS_PER_PIXEL },
+    { WL_SHM_FORMAT_RGB565, PICT_r5g6b5, MB_RGB565_DEPTH, MB_RGB16_BPP },
+    { WL_SHM_FORMAT_XRGB1555, PICT_x1r5g5b5, MB_XRGB1555_DEPTH, MB_RGB16_BPP },
+};
+
+typedef struct
+{
     MbBuffer base;
     struct MbShmPool *pool;
     int32_t stride, offset;
-    uint32_t format;
+    const ShmFormat *format;
 } MbShmBuffer;
 
 static void
@@ -52,17 +70,63 @@ shm_buffer_destroy (MbBuffer *base)
 }
 
 static PixmapPtr
+snapshot_packed_rows (MbShmBuffer *buffer, ScreenPtr screen)
+{
+    MbBuffer *base = &buffer->base;
+    unsigned int depth = buffer->format->depth;
+    size_t stride = PixmapBytePad (base->width, depth);
+    size_t row_bytes = base->width * (buffer->format->bpp / CHAR_BIT);
+    size_t size = stride * base->height;
+    PixmapPtr copy = NULL;
+    char *pixels;
+
+    if (size > MB_MAX_SNAPSHOT_BYTES)
+        return NULL;
+    pixels = calloc (1, size);
+    if (!pixels)
+        return NULL;
+    /* X pixmaps require aligned rows. Read packed client rows without
+     * mapping them so a truncated pool cannot fault during the copy. */
+    for (int32_t row = 0; row < base->height; row++)
+    {
+        off_t offset = (off_t)buffer->offset + (off_t)row * buffer->stride;
+        size_t done = 0;
+
+        while (done < row_bytes)
+        {
+            ssize_t count =
+                pread (buffer->pool->fd, pixels + row * stride + done,
+                       row_bytes - done, offset + done);
+
+            if (count < 0 && errno == EINTR)
+                continue;
+            if (count < 0)
+                goto out;
+            if (!count)
+                break;
+            done += count;
+        }
+    }
+    copy = mb_pixmap_upload (screen, base->width, base->height, depth, pixels);
+out:
+    free (pixels);
+    return copy;
+}
+
+static PixmapPtr
 shm_snapshot (MbBuffer *base, ScreenPtr screen)
 {
     MbShmBuffer *buffer = (MbShmBuffer *)base;
-    unsigned int depth = buffer->format == WL_SHM_FORMAT_ARGB8888
-                             ? MB_SHM_ARGB_DEPTH
-                             : MB_SHM_XRGB_DEPTH;
-    PixmapPtr imported = shm_create_pixmap_from_fd (
-        screen, buffer->pool->fd, base->width, base->height, depth,
-        MB_SHM_BITS_PER_PIXEL, buffer->stride, buffer->offset);
-    PixmapPtr copy;
+    unsigned int depth = buffer->format->depth;
+    PixmapPtr imported, copy;
 
+    if (buffer->stride < PixmapBytePad (base->width, depth) ||
+        buffer->stride % (BITMAP_SCANLINE_PAD / CHAR_BIT) ||
+        buffer->offset % sizeof (CARD32))
+        return snapshot_packed_rows (buffer, screen);
+    imported = shm_create_pixmap_from_fd (
+        screen, buffer->pool->fd, base->width, base->height, depth,
+        buffer->format->bpp, buffer->stride, buffer->offset);
     if (!imported)
         return NULL;
     /* Spaghetti's imported pixmap guards reads against SIGBUS. */
@@ -108,18 +172,31 @@ pool_create_buffer (struct wl_client *client, struct wl_resource *resource,
     struct MbShmPool *pool = wl_resource_get_user_data (resource);
     MbShmBuffer *buffer;
 
-    if (format != WL_SHM_FORMAT_ARGB8888 && format != WL_SHM_FORMAT_XRGB8888)
+    const ShmFormat *layout = NULL;
+    unsigned int bytes_per_pixel;
+
+    for (size_t i = 0; i < ARRAY_SIZE (formats); i++)
+    {
+        if (formats[i].wire_format == format &&
+            PictureMatchFormat (screenInfo.screens[0], formats[i].depth,
+                                formats[i].render_format))
+        {
+            layout = &formats[i];
+            break;
+        }
+    }
+    if (!layout)
     {
         wl_resource_post_error (resource, WL_SHM_ERROR_INVALID_FORMAT,
                                 "unsupported SHM format");
         return;
     }
+    bytes_per_pixel = layout->bpp / CHAR_BIT;
     if (width <= 0 || height <= 0 || width > MB_MAX_DIMENSION ||
         height > MB_MAX_DIMENSION ||
-        stride < (int64_t)width * MB_SHM_BYTES_PER_PIXEL ||
-        stride % MB_SHM_BYTES_PER_PIXEL || offset < 0 ||
-        offset % MB_SHM_BYTES_PER_PIXEL || offset > pool->size ||
-        (int64_t)stride * height > pool->size - offset)
+        stride < (int64_t)width * bytes_per_pixel ||
+        stride % bytes_per_pixel || offset < 0 || offset % bytes_per_pixel ||
+        offset > pool->size || (int64_t)stride * height > pool->size - offset)
     {
         wl_resource_post_error (resource, WL_SHM_ERROR_INVALID_STRIDE,
                                 "invalid SHM buffer extent");
@@ -134,6 +211,7 @@ pool_create_buffer (struct wl_client *client, struct wl_resource *resource,
     buffer->base = (MbBuffer){
         .width = width,
         .height = height,
+        .render_format = layout->render_format,
         .snapshot = shm_snapshot,
         .destroy = shm_buffer_destroy,
     };
@@ -147,7 +225,7 @@ pool_create_buffer (struct wl_client *client, struct wl_resource *resource,
     pool->refs++;
     buffer->stride = stride;
     buffer->offset = offset;
-    buffer->format = format;
+    buffer->format = layout;
 }
 
 static const struct wl_shm_pool_interface pool_implementation = {
@@ -215,8 +293,12 @@ bind_shm (struct wl_client *client, void *data, uint32_t version, uint32_t id)
         return;
     }
     wl_resource_set_implementation (resource, &implementation, NULL, NULL);
-    wl_shm_send_format (resource, WL_SHM_FORMAT_ARGB8888);
-    wl_shm_send_format (resource, WL_SHM_FORMAT_XRGB8888);
+    for (size_t i = 0; i < ARRAY_SIZE (formats); i++)
+    {
+        if (PictureMatchFormat (screenInfo.screens[0], formats[i].depth,
+                                formats[i].render_format))
+            wl_shm_send_format (resource, formats[i].wire_format);
+    }
 }
 
 Bool
