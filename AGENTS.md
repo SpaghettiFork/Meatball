@@ -47,7 +47,8 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
 The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
-linux-dmabuf, and pointer-constraints-unstable-v1.
+linux-dmabuf, pointer-constraints-unstable-v1, and
+relative-pointer-unstable-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -100,8 +101,9 @@ a module-load error.
 ### SDK requirements
 
 The SDK must include the 32-bit native SHM stride parameter and the exported
-XACE send-access hook, `XISetEventMask`, and `RT_XKBCLIENT` on Spaghetti's
-`meatball` branch. The configuration check validates the SHM signature, and
+XACE send-access hook, `XISetEventMask`, `RT_XKBCLIENT`, and
+`RelativeMotionCallback` on Spaghetti's `meatball` branch. The configuration
+check validates the SHM signature and relative-motion declaration, and
 the SDK probe validates the required exports, including `GrabDevice` and
 `WindowHasNewCursor` for native drag grabs and cursor updates.
 
@@ -290,6 +292,14 @@ accepted. Unlocking keeps the current cursor position. Constraints release
 on focus loss, unmap, or device retirement and yield to native menu, drag,
 and move or resize grabs.
 
+Version 1 `zwp_relative_pointer_manager_v1` sends accelerated and
+unaccelerated Xorg motion deltas to the pointer-focused client. Deltas are
+captured before cursor clipping, including during locks and confinement.
+Absolute device motion, cursor warps, scrolling, and motion under a foreign
+X11 grab produce no relative events. Relative pointers follow their seat's
+focus and become inert when it is removed. Timestamps express Xorg's
+millisecond event clock in microseconds.
+
 ### Outputs
 
 Version 4 `wl_output` describes each connected, enabled RandR desktop output.
@@ -363,7 +373,6 @@ Xdnd versions 1 and 2 are not implemented.
 - Leases.
 - Text-input-v3 is deferred.
 - Server-side decoration negotiation.
-- `relative-pointer-unstable-v1`.
 - `xdg-system-bell-v1`.
 - `tearing-control-v1`.
 
@@ -432,6 +441,10 @@ Every check runs against the isolated module test host.
   button delivery, nonrectangular and double-buffered regions, synchronized
   subsurface commits, focus and lifetime rules, duplicate requests, window
   manager handoff, and disconnect cleanup.
+- `native-relative-pointer` checks processed and raw delta delivery during
+  normal motion, locks, and confinement. It also covers absolute motion,
+  scroll and foreign-grab filtering, client and seat isolation, resource
+  lifetime, and master-device removal.
 - `native-cursor` reads back ARGB cursor images through XFixes.
 - `native-interactive` checks move/resize serials, all resize directions, and
   pointer-grab transfer to a test WM.
