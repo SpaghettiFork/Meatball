@@ -16,11 +16,10 @@ Out of the box, no.
 
 Meatball requires a set of patches that enables it to talk to Xorg directly and register external type clients to Xorg, who can then schedule and talk to them independently.
 
-
 ### What is the state of this project?
 
-At the moment we support a Mimimum Viable Product set of Wayland features that enables
-basic applications to function, these are applications that mostly rely on either software presentation or rendering through  `wl_shm`.
+At the moment we support a basic set of Wayland protocols that enable basic applications
+to function, more complex applications may still have missing or incorrect functionality.
 
 You should treat this project as alpha level of quality.
 
@@ -36,8 +35,8 @@ meson compile -C src/builddir
 meson test -C src/builddir --print-errorlogs
 ```
 
-To set it up, you need to put `libsauce.so` into `/usr/lib/xorg/modules` and add this
-to your Xorg config.
+To set it up, you need to put `libsauce.so` into `/usr/lib/xorg/modules`
+and add this to the configuration of your patched build of Spaghetti.
 
 ```conf
 Section "Module"
