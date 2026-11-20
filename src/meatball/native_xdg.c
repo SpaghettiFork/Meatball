@@ -1200,6 +1200,7 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
     if (!constrained)
     {
         MbSceneIterator iterator = { .root = surface, .surface = surface };
+        const pixman_box32_t client_geometry = geometry;
         MbSurface *node;
 
         result =
@@ -1212,6 +1213,15 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
         while ((node = mb_scene_next (&iterator)))
         {
             if (node == surface)
+                continue;
+            /* Clip overlapping decorations without hiding separate
+             * subsurfaces painted entirely outside the window geometry. */
+            if (!node->input_default &&
+                !pixman_region32_not_empty (&node->input) &&
+                iterator.x < client_geometry.x2 &&
+                iterator.y < client_geometry.y2 &&
+                iterator.x + node->width > client_geometry.x1 &&
+                iterator.y + node->height > client_geometry.y1)
                 continue;
             geometry.x1 = min ((int64_t)geometry.x1, iterator.x);
             geometry.y1 = min ((int64_t)geometry.y1, iterator.y);
