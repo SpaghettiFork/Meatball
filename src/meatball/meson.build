@@ -13,6 +13,13 @@ xdg_header = custom_target('native-xdg-header',
 xdg_code = custom_target('native-xdg-code',
                          input: 'wayland-proto/xdg-shell.xml', output: 'xdg-shell.c',
                          command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+xdg_output_xml = 'wayland-proto/xdg-output-unstable-v1.xml'
+xdg_output_header = custom_target('native-xdg-output-header',
+                                  input: xdg_output_xml, output: 'xdg-output.h',
+                                  command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+xdg_output_code = custom_target('native-xdg-output-code',
+                                input: xdg_output_xml, output: 'xdg-output.c',
+                                command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 viewport_header = custom_target('native-viewport-header',
                                 input: 'wayland-proto/viewporter.xml', output: 'viewporter.h',
                                 command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
@@ -100,6 +107,8 @@ srcs_meatball = [
     'native_viewport.c',
     xdg_header,
     xdg_code,
+    xdg_output_header,
+    xdg_output_code,
     viewport_header,
     viewport_code,
     primary_header,
