@@ -130,7 +130,7 @@ shm_snapshot (MbBuffer *base, ScreenPtr screen)
     if (!imported)
         return NULL;
     /* Spaghetti's imported pixmap guards reads against SIGBUS. */
-    copy = mb_pixmap_snapshot (imported, FALSE);
+    copy = mb_pixmap_snapshot (imported);
     screen->DestroyPixmap (imported);
     return copy;
 }

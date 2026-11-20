@@ -183,12 +183,13 @@ compositing. If the device is unavailable, the global stays at version 3.
 An asynchronous DRI3 reply can advertise version 4 for new bindings.
 Meatball uses DRI3 to import the planes for both buffer creation requests.
 XRGB1555 DMA-BUF needs exact format discovery and import support in Spaghetti.
-Ordinary progressive DMA-BUF commits use the Xorg driver's pixmap-to-pixmap
-`CopyArea` into server-owned storage. The module submits queued work through
-the screen's Sync fence and waits for the imported planes' implicit fences
-before releasing the client buffer. The fence wait has a one-second limit.
-Y-inverted buffers and screens without a copy fence use the readback snapshot.
-The window retains its pixels after the client reuses its storage.
+Progressive DMA-BUF commits retain the DRI3 import as surface content. Render
+samples the imported pixmap directly and handles Y inversion in its sampling
+transform. The module submits queued reads through the screen's Sync fence
+when the final committed or queued use ends. It sends `wl_buffer.release` once
+the imported planes' implicit fences are ready and waits asynchronously when
+they are busy. Destroying the Wayland buffer object leaves committed content
+alive until the surface replaces or drops it.
 
 ### Toplevels
 
@@ -388,12 +389,13 @@ Every check runs against the isolated module test host.
 - `native-shm` checks 32-bit and 16-bit imports, wide and packed strides,
   buffer release, pixel readback, and redraws after the client reuses its storage.
 - `native-dmabuf` checks modifier advertisements, both buffer creation
-  requests, rejected parameters, buffer release and reuse, Y inversion, and
-  the absence of the global without DRI3. The test host rejects `GetImage` on
-  the ordinary DMA-BUF fixtures. The check also covers default and per-surface
-  feedback, sealed format tables, asynchronous device discovery, and version 3
-  fallback. The Xvfb driver uses guarded memory-backed pixmaps and a test
-  device.
+  requests, rejected parameters, retained buffers and synchronized
+  subsurfaces, reuse after release, and Y inversion with every buffer
+  transform. It also checks the absence of the global without DRI3, default
+  and per-surface feedback, sealed format tables, asynchronous device
+  discovery, and version 3 fallback. The Xvfb driver uses guarded memory-backed
+  pixmaps, rejects direct readback of test imports, and uses an eventfd to
+  exercise asynchronous release and destruction while a fence is pending.
 - `native-shm-fault` truncates an imported file during rendering to exercise
   Spaghetti's SIGBUS handling.
 - `native-xdg` checks mapped pixel content, a test X11 window manager, configure

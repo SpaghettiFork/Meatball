@@ -50,7 +50,11 @@ content_unref (MbSurface *surface, MbSurfaceContent *content)
                                  surface->client->native,
                                  DixDestroyAccess) == Success)
         FreeResource (content->pixels, RT_NONE);
-    mb_buffer_unref (content->buffer);
+    MbBuffer *buffer = content->buffer;
+
+    if (buffer->imported && !--buffer->uses && buffer->resource)
+        buffer->release_import (buffer);
+    mb_buffer_unref (buffer);
     free (content);
 }
 
@@ -652,27 +656,39 @@ capture_commit (MbSurface *surface)
     {
         if (buffer)
         {
-            PixmapPtr copy;
-            XID id;
+            MbSurfaceContent *attached = calloc (1, sizeof (*attached));
 
-            commit->content = calloc (1, sizeof (*commit->content));
-            if (!commit->content)
+            if (!attached)
                 goto fail;
-            commit->content->refs = 1;
-            commit->content->buffer = buffer;
+            commit->content = attached;
+            attached->refs = 1;
+            attached->buffer = buffer;
             buffer->refs++;
-            copy = buffer->snapshot (buffer, surface->window.screen);
-            if (!copy)
-                goto fail;
-            id = FakeClientID (surface->client->native->index);
-            copy->drawable.id = id;
-            if (!AddResource (id, RT_PIXMAP, copy))
-                goto fail;
-            commit->content->pixels = id;
+            if (buffer->imported)
+            {
+                buffer->uses++;
+                if (buffer->imported->drawable.pScreen !=
+                    surface->window.screen)
+                    goto fail;
+            }
+            else
+            {
+                PixmapPtr copy =
+                    buffer->snapshot (buffer, surface->window.screen);
+                XID id;
+
+                if (!copy)
+                    goto fail;
+                id = FakeClientID (surface->client->native->index);
+                copy->drawable.id = id;
+                if (!AddResource (id, RT_PIXMAP, copy))
+                    goto fail;
+                attached->pixels = id;
+                if (buffer->resource)
+                    wl_buffer_send_release (buffer->resource);
+            }
             commit->offset_x = surface->pending_x;
             commit->offset_y = surface->pending_y;
-            if (buffer->resource)
-                wl_buffer_send_release (buffer->resource);
         }
         if (surface->pending_buffer)
             mb_buffer_unref (surface->pending_buffer);

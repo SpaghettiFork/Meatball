@@ -10,9 +10,12 @@ typedef struct MbBuffer MbBuffer;
 struct MbBuffer
 {
     struct wl_resource *resource;
-    unsigned int refs;
+    unsigned int refs, uses;
     int32_t width, height;
     CARD32 render_format;
+    Bool y_invert;
+    PixmapPtr imported;
+    void (*release_import) (MbBuffer *buffer);
     PixmapPtr (*snapshot) (MbBuffer *buffer, ScreenPtr screen);
     void (*destroy) (MbBuffer *buffer);
 };
@@ -30,6 +33,6 @@ extern PixmapPtr mb_pixmap_upload (ScreenPtr screen, unsigned int width,
                                    unsigned int height, unsigned int depth,
                                    char *pixels);
 /* Read the client pixels before release, into an independent pixmap. */
-extern PixmapPtr mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert);
+extern PixmapPtr mb_pixmap_snapshot (PixmapPtr imported);
 
 #endif

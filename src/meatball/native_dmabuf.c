@@ -11,13 +11,11 @@
 #include <errno.h>
 #include <extnsionst.h>
 #include <fcntl.h>
-#include <gcstruct.h>
 #include <limits.h>
 #include <misyncstr.h>
 #include <picturestr.h>
 #include <pixmapstr.h>
 #include <poll.h>
-#include <regionstr.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -32,7 +30,6 @@
 #define INVALID_FD (-1)
 #define DMABUF_MAX_PLANES 4
 #define MODIFIER_HALF_BITS 32
-#define COPY_FENCE_TIMEOUT_MS 1000
 
 typedef struct
 {
@@ -68,7 +65,7 @@ struct MbDmabuf
 {
     struct wl_global *global;
     ScreenPtr screen;
-    SyncFence *copy_fence;
+    SyncFence *release_fence;
     Modifiers modifiers[ARRAY_SIZE (formats)];
     dev_t device;
     int table_fd;
@@ -89,91 +86,103 @@ typedef struct
 typedef struct
 {
     MbBuffer base;
-    PixmapPtr pixmap;
     int fds[DMABUF_MAX_PLANES];
+    struct wl_event_source *waits[DMABUF_MAX_PLANES];
     unsigned int plane_count;
-    Bool y_invert;
 } DmabufBuffer;
+
+static void
+cancel_release_wait (DmabufBuffer *buffer)
+{
+    for (unsigned int i = 0; i < buffer->plane_count; i++)
+    {
+        if (buffer->waits[i])
+        {
+            wl_event_source_remove (buffer->waits[i]);
+            buffer->waits[i] = NULL;
+        }
+    }
+}
+
+static int dmabuf_release_ready (int fd, uint32_t mask, void *data);
+
+static void
+wait_for_release (DmabufBuffer *buffer)
+{
+    struct pollfd fds[DMABUF_MAX_PLANES];
+    struct wl_resource *resource = buffer->base.resource;
+    Bool pending = FALSE;
+    int result;
+
+    cancel_release_wait (buffer);
+    if (!resource || buffer->base.uses)
+        return;
+    for (unsigned int i = 0; i < buffer->plane_count; i++)
+        fds[i] = (struct pollfd){ .fd = buffer->fds[i], .events = POLLOUT };
+    do
+        result = poll (fds, buffer->plane_count, 0);
+    while (result < 0 && errno == EINTR);
+    if (result < 0)
+        goto bad_fence;
+    for (unsigned int i = 0; i < buffer->plane_count; i++)
+    {
+        if (fds[i].revents & (POLLERR | POLLHUP | POLLNVAL))
+            goto bad_fence;
+        if (fds[i].revents & POLLOUT)
+            continue;
+        buffer->waits[i] = wl_event_loop_add_fd (
+            compositor.wl_event_loop, buffer->fds[i], WL_EVENT_WRITABLE,
+            dmabuf_release_ready, buffer);
+        if (!buffer->waits[i])
+        {
+            cancel_release_wait (buffer);
+            wl_resource_post_no_memory (resource);
+            return;
+        }
+        pending = TRUE;
+    }
+    if (!pending)
+        wl_buffer_send_release (resource);
+    return;
+
+bad_fence:
+    cancel_release_wait (buffer);
+    wl_client_post_implementation_error (wl_resource_get_client (resource),
+                                         "failed to wait for DMA-BUF release");
+}
+
+static int
+dmabuf_release_ready (int fd, uint32_t mask, void *data)
+{
+    wait_for_release (data);
+    return 0;
+}
+
+static void
+dmabuf_release (MbBuffer *base)
+{
+    if (!compositor.dmabuf)
+        return;
+
+    /* Submit pending Render reads before inspecting implicit DMA-BUF fences.
+     * POLLOUT signals that all previous readers and writers are finished. */
+    SyncFence *fence = compositor.dmabuf->release_fence;
+    miSyncTriggerFence (fence);
+    fence->funcs.Reset (fence);
+    wait_for_release ((DmabufBuffer *)base);
+}
 
 static void
 dmabuf_buffer_destroy (MbBuffer *base)
 {
     DmabufBuffer *buffer = (DmabufBuffer *)base;
+    PixmapPtr pixmap = base->imported;
 
+    cancel_release_wait (buffer);
     for (unsigned int i = 0; i < buffer->plane_count; i++)
         close (buffer->fds[i]);
-    buffer->pixmap->drawable.pScreen->DestroyPixmap (buffer->pixmap);
+    pixmap->drawable.pScreen->DestroyPixmap (pixmap);
     free (buffer);
-}
-
-static PixmapPtr
-dmabuf_snapshot (MbBuffer *base, ScreenPtr screen)
-{
-    DmabufBuffer *buffer = (DmabufBuffer *)base;
-    DrawablePtr source = &buffer->pixmap->drawable;
-    SyncFence *fence = compositor.dmabuf->copy_fence;
-    struct pollfd fds[DMABUF_MAX_PLANES];
-    PixmapPtr copy;
-    GCPtr gc;
-    RegionPtr exposed;
-    unsigned int remaining = buffer->plane_count;
-    CARD32 start;
-
-    if (source->pScreen != screen)
-        return NULL;
-    if (buffer->y_invert || !fence)
-        return mb_pixmap_snapshot (buffer->pixmap, buffer->y_invert);
-
-    copy = screen->CreatePixmap (screen, source->width, source->height,
-                                 source->depth, 0);
-    if (!copy)
-        return NULL;
-    gc = GetScratchGC (source->depth, screen);
-    if (!gc)
-        goto fail;
-    ValidateGC (&copy->drawable, gc);
-    exposed = gc->ops->CopyArea (source, &copy->drawable, gc, 0, 0,
-                                 source->width, source->height, 0, 0);
-    if (exposed)
-        RegionDestroy (exposed);
-    FreeScratchGC (gc);
-
-    /* Triggering an X Sync fence submits queued Glamor work. POLLOUT on
-     * the DMA-BUF waits for both readers and writers, so the client cannot
-     * write to its storage while the copy is still reading from it. */
-    miSyncTriggerFence (fence);
-    fence->funcs.Reset (fence);
-    for (unsigned int i = 0; i < buffer->plane_count; i++)
-        fds[i] = (struct pollfd){ .fd = buffer->fds[i], .events = POLLOUT };
-    start = GetTimeInMillis ();
-    while (remaining)
-    {
-        CARD32 elapsed = GetTimeInMillis () - start;
-        int ready;
-
-        if (elapsed >= COPY_FENCE_TIMEOUT_MS)
-            goto fail;
-        ready =
-            poll (fds, buffer->plane_count, COPY_FENCE_TIMEOUT_MS - elapsed);
-        if (ready < 0 && errno == EINTR)
-            continue;
-        if (ready <= 0)
-            goto fail;
-        for (unsigned int i = 0; i < buffer->plane_count; i++)
-        {
-            if (fds[i].revents & (POLLERR | POLLHUP | POLLNVAL))
-                goto fail;
-            if (!(fds[i].revents & POLLOUT))
-                continue;
-            fds[i].fd = INVALID_FD;
-            remaining--;
-        }
-    }
-    return copy;
-
-fail:
-    screen->DestroyPixmap (copy);
-    return NULL;
 }
 
 static void
@@ -353,24 +362,20 @@ create_buffer (struct wl_client *client, struct wl_resource *resource,
         .width = width,
         .height = height,
         .render_format = format->render_format,
-        .snapshot = dmabuf_snapshot,
+        .imported = pixmap,
+        .y_invert = (flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT) != 0,
+        .release_import = dmabuf_release,
         .destroy = dmabuf_buffer_destroy,
     };
-    buffer->pixmap = pixmap;
-    buffer->y_invert = flags & ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT;
     if (!mb_buffer_publish (&buffer->base, client, id))
     {
         free (buffer);
         goto no_memory;
     }
-    if (!buffer->y_invert && dmabuf->copy_fence)
-    {
-        buffer->plane_count = count;
-        for (unsigned int i = 0; i < count; i++)
-            buffer->fds[i] = params->fds[i];
-        params->mask = 0;
-    }
-    close_planes (params);
+    buffer->plane_count = count;
+    for (unsigned int i = 0; i < count; i++)
+        buffer->fds[i] = params->fds[i];
+    params->mask = 0;
     if (!id)
         zwp_linux_buffer_params_v1_send_created (resource,
                                                  buffer->base.resource);
@@ -670,13 +675,13 @@ mb_dmabuf_initialize (void)
         mb_dmabuf_shutdown ();
         return TRUE;
     }
-    if (miSyncSetup (screen))
-    {
-        dmabuf->copy_fence =
-            dixAllocateObjectWithPrivates (SyncFence, PRIVATE_SYNC_FENCE);
-        if (dmabuf->copy_fence)
-            miSyncInitFence (screen, dmabuf->copy_fence, FALSE);
-    }
+    if (!miSyncSetup (screen))
+        return FALSE;
+    dmabuf->release_fence =
+        dixAllocateObjectWithPrivates (SyncFence, PRIVATE_SYNC_FENCE);
+    if (!dmabuf->release_fence)
+        return FALSE;
+    miSyncInitFence (screen, dmabuf->release_fence, FALSE);
     ClientPtr bridge = compositor.bridge_client->native;
 
     if (dri3_open (bridge, screen, NULL, &fd) == Success)
@@ -709,8 +714,8 @@ mb_dmabuf_shutdown (void)
         return;
     if (dmabuf->global)
         wl_global_destroy (dmabuf->global);
-    if (dmabuf->copy_fence)
-        miSyncDestroyFence (dmabuf->copy_fence);
+    if (dmabuf->release_fence)
+        miSyncDestroyFence (dmabuf->release_fence);
     for (size_t i = 0; i < ARRAY_SIZE (formats); i++)
         free (dmabuf->modifiers[i].values);
     if (dmabuf->table_fd >= 0)

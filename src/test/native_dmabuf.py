@@ -13,7 +13,11 @@ from host_support import STARTUP_TIMEOUT, connect_x11, server
 from native_lifecycle import POLL_INTERVAL, wait_socket
 from native_shm import (COLORS, HEIGHT, WIDTH, BYTES_PER_PIXEL, wait_pixels,
                         RGB565_PIXELS, RGB16_EXPECTED, RGB16_BYTES)
+from native_subsurfaces import child, publish
 from native_surfaces import query_tree, root_window
+from native_transforms import (NORMAL, ROTATION_COUNT, SURFACE_ATTACH,
+                               SURFACE_COMMIT, SURFACE_TRANSFORM, TRANSFORM_COUNT,
+                               transformed, wait_image)
 from native_xdg import XdgClient
 from wayland_support import Wayland, WaylandProtocolError
 
@@ -62,6 +66,8 @@ ADVERTISED_PAIRS = {(RGB, LINEAR), (ARGB, LINEAR), (RGB565, LINEAR), (RGB, IMPLI
 STRIDE = WIDTH * BYTES_PER_PIXEL
 OFFSET = BYTES_PER_PIXEL
 SIZE = OFFSET + STRIDE * HEIGHT
+COLOR_ROWS = tuple(COLORS[start:start + WIDTH] for start in range(0, len(COLORS), WIDTH))
+FENCE_BLOCKED = (1 << 64) - 2
 
 
 def new_params(client, manager):
@@ -75,6 +81,27 @@ def add(client, params, fd, index=0, offset=OFFSET, stride=STRIDE,
     client.send(params, PARAMS_ADD,
                 struct.pack("=IIIII", index, offset, stride, modifier >> 32,
                             modifier & 0xffffffff), fds=[fd])
+
+
+def create_immediate(client, manager, fd, fourcc=RGB, stride=STRIDE):
+    params = new_params(client, manager)
+    add(client, params, fd, stride=stride)
+    buffer = client.allocate_id()
+    client.send(params, PARAMS_CREATE_IMMED,
+                struct.pack("=IiiII", buffer, WIDTH, HEIGHT, fourcc, 0))
+    client.send(params, PARAMS_DESTROY)
+    return buffer
+
+
+def assert_busy(client, buffer, frame=None):
+    if frame is not None:
+        while True:
+            resource, opcode, _ = client.receive()
+            assert (resource, opcode) != (buffer, BUFFER_RELEASE)
+            if resource == frame:
+                assert opcode == 0
+                break
+    assert (buffer, BUFFER_RELEASE, b"") not in client.roundtrip_events()
 
 
 def params_event(client, params, expected):
@@ -164,33 +191,36 @@ def check_import(path, display, fd, version):
 
         client.commit()
         client.configure()
-        params = new_params(client, manager)
-        add(client, params, fd)
-        buffer = client.allocate_id()
-        client.send(params, PARAMS_CREATE_IMMED,
-                    struct.pack("=IiiII", buffer, WIDTH, HEIGHT, RGB, 0))
-        client.send(params, PARAMS_DESTROY)
+        buffer = create_immediate(client, manager, fd)
         frame = client.frame()
         client.attach(buffer)
         client.commit()
-        buffer_release(client, buffer)
-        # Reuse is allowed at release, including before the frame callback.
-        changed = COLORS[::-1]
-        os.pwrite(fd, struct.pack(f"={len(changed)}I", *changed), OFFSET)
-        client.frame_done(frame)
+        assert_busy(client, buffer, frame)
         wait_pixels(observer, window, COLORS)
 
-        # The released client's pixels can change without changing the scene.
-        frame = client.frame()
+        # A synchronized child can retain the buffer after the parent replaces it.
+        client.subcompositor = client.bind("wl_subcompositor")
+        subsurface, _ = child(client, client.surface)
+        client.send(subsurface, SURFACE_ATTACH, struct.pack("=Iii", buffer, 0, 0))
+        client.send(subsurface, SURFACE_COMMIT)
+        assert_busy(client, buffer)
+        assert (buffer, BUFFER_RELEASE, b"") not in publish(client, client.surface, COLOR_ROWS)
+        client.send(subsurface, SURFACE_ATTACH, struct.pack("=Iii", 0, 0, 0))
+        client.send(subsurface, SURFACE_COMMIT)
+        assert_busy(client, buffer)
         client.commit()
-        client.frame_done(frame)
-        wait_pixels(observer, window, COLORS)
+        buffer_release(client, buffer)
+
+        # After release the original storage can be reused and attached again.
+        changed = COLORS[::-1]
+        os.pwrite(fd, struct.pack(f"={len(changed)}I", *changed), OFFSET)
         frame = client.frame()
         client.attach(buffer)
         client.send(buffer, BUFFER_DESTROY)
         client.commit()
         client.frame_done(frame)
         wait_pixels(observer, window, changed)
+        publish(client, client.surface, COLOR_ROWS)
 
         params = new_params(client, manager)
         add(client, params, fd)
@@ -201,25 +231,74 @@ def check_import(path, display, fd, version):
         frame = client.frame()
         client.attach(buffer)
         client.commit()
-        buffer_release(client, buffer)
-        client.frame_done(frame)
-        # This time the source buffer carries alpha.
-        flipped = changed[WIDTH:] + changed[:WIDTH]
-        wait_pixels(observer, window, flipped)
+        assert_busy(client, buffer, frame)
+        flipped = tuple(changed[start:start + WIDTH]
+                        for start in range(0, len(changed), WIDTH))[::-1]
+        for transform in range(TRANSFORM_COUNT):
+            client.send(client.surface, SURFACE_TRANSFORM, struct.pack("=i", transform))
+            client.commit()
+            assert_busy(client, buffer)
+            inverse = (-transform) % ROTATION_COUNT if transform < ROTATION_COUNT else transform
+            wait_image(observer, window, transformed(flipped, inverse))
+        client.send(client.surface, SURFACE_TRANSFORM, struct.pack("=i", NORMAL))
+        events = publish(client, client.surface, COLOR_ROWS)
+        assert (buffer, BUFFER_RELEASE, b"") in events
 
         os.pwrite(fd, struct.pack(f"={len(RGB565_PIXELS)}H", *RGB565_PIXELS), OFFSET)
-        params = new_params(client, manager)
-        add(client, params, fd, stride=WIDTH * RGB16_BYTES)
-        buffer = client.allocate_id()
-        client.send(params, PARAMS_CREATE_IMMED,
-                    struct.pack("=IiiII", buffer, WIDTH, HEIGHT, RGB565, 0))
-        client.send(params, PARAMS_DESTROY)
+        buffer = create_immediate(client, manager, fd, RGB565, WIDTH * RGB16_BYTES)
         frame = client.frame()
         client.attach(buffer)
         client.commit()
-        buffer_release(client, buffer)
-        client.frame_done(frame)
+        assert_busy(client, buffer, frame)
         wait_pixels(observer, window, RGB16_EXPECTED)
+        client.attach(0)
+        client.commit()
+        buffer_release(client, buffer)
+    finally:
+        client.close()
+        observer.close()
+
+
+def check_pending_release(path, display, fd, fence):
+    observer, setup = connect_x11(display, return_setup=True)
+    client = XdgClient(path)
+    try:
+        manager = client.bind(INTERFACE)
+        client.commit()
+        client.configure()
+        buffer = create_immediate(client, manager, fd)
+        for reattach in (False, True):
+            os.eventfd_write(fence, FENCE_BLOCKED)
+            client.attach(buffer)
+            client.commit()
+            assert_busy(client, buffer)
+            assert (buffer, BUFFER_RELEASE, b"") not in publish(client, client.surface, COLOR_ROWS)
+            assert_busy(client, buffer)
+            # Both protocol connections remain responsive while the fence waits.
+            query_tree(observer, root_window(setup))
+            if reattach:
+                client.attach(buffer)
+                client.commit()
+                assert_busy(client, buffer)
+            assert os.eventfd_read(fence) == FENCE_BLOCKED
+            if reattach:
+                assert_busy(client, buffer)
+                assert (buffer, BUFFER_RELEASE, b"") in publish(
+                    client, client.surface, COLOR_ROWS)
+            else:
+                buffer_release(client, buffer)
+
+        # Destroying the resource cancels the pending fence watch.
+        os.eventfd_write(fence, FENCE_BLOCKED)
+        client.attach(buffer)
+        client.commit()
+        assert_busy(client, buffer)
+        assert (buffer, BUFFER_RELEASE, b"") not in publish(
+            client, client.surface, COLOR_ROWS)
+        client.send(buffer, BUFFER_DESTROY)
+        client.sync()
+        assert os.eventfd_read(fence) == FENCE_BLOCKED
+        assert_busy(client, buffer)
     finally:
         client.close()
         observer.close()
@@ -299,6 +378,18 @@ def main():
                     check_import(path, display, fd, version)
                     check_failures(path, fd, version)
                     assert process.poll() is None
+            fence = os.eventfd(0, os.EFD_NONBLOCK | os.EFD_CLOEXEC)
+            try:
+                os.pwrite(fd, struct.pack(f"={len(COLORS)}I", *COLORS), OFFSET)
+                with server(host, module, {"MEATBALL_TEST_SOCKET": str(path),
+                                           "MEATBALL_TEST_DRI3": "1",
+                                           "MEATBALL_TEST_DRI3_RELEASE_FD": str(fence)},
+                            pass_fds=(fence,)) as (process, display):
+                    wait_socket(path, process)
+                    check_pending_release(path, display, fd, fence)
+                    assert process.poll() is None
+            finally:
+                os.close(fence)
         finally:
             os.close(fd)
 

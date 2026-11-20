@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <pixmapstr.h>
 #include <shmint.h>
+#include <unistd.h>
 #endif
 
 #define MODULE_PATH_ENV "MEATBALL_TEST_MODULE"
@@ -32,7 +33,7 @@ extern void __wrap_InitExtensions (int argc, char **argv);
 #define TEST_DRI3_NO_DEVICE "no-device"
 #define TEST_DRI3_ASYNC "async"
 #define TEST_DEVICE "/dev/null"
-#define TEST_ARGB_DEPTH 32
+#define TEST_DRI3_RELEASE_FD_ENV "MEATBALL_TEST_DRI3_RELEASE_FD"
 
 static DevPrivateKeyRec test_dri3_pixmap_key;
 static GetImageProcPtr test_dri3_get_image;
@@ -121,15 +122,21 @@ test_dri3_import (ScreenPtr screen, CARD8 count, const int *fds, CARD16 width,
                   CARD8 depth, CARD8 bpp, CARD64 modifier)
 {
     PixmapPtr pixmap;
+    const char *release_fd = getenv (TEST_DRI3_RELEASE_FD_ENV);
 
     if (count != 1)
         return NULL;
     /* A test-only driver backed by the server's guarded SHM pixmaps. */
     pixmap = shm_create_pixmap_from_fd (screen, fds[0], width, height, depth,
                                         bpp, strides[0], offsets[0]);
-    /* The ARGB fixture uses the Y-inversion readback path. */
-    if (pixmap && depth != TEST_ARGB_DEPTH)
+    if (pixmap)
+    {
         dixSetPrivate (&pixmap->devPrivates, &test_dri3_pixmap_key, pixmap);
+        /* The CPU pixmap already has its mapping. Replace the test import's
+         * descriptor with an eventfd to exercise GPU release readiness. */
+        if (release_fd && dup3 (atoi (release_fd), fds[0], O_CLOEXEC) < 0)
+            FatalError ("meatball-test: could not set DMA-BUF release fd\n");
+    }
     return pixmap;
 }
 
