@@ -2,15 +2,18 @@
 
 #include <xorg-server.h>
 
+#include <X11/extensions/XI.h>
+#include <dixstruct.h>
 #include <dlfcn.h>
+#include <exevents.h>
 #include <extension.h>
+#include <inputstr.h>
 #include <stdlib.h>
 #include <string.h>
 #include <xf86Module.h>
 #include <xf86Optionstr.h>
 
 #ifdef DRI3
-#include <dixstruct.h>
 #include <dri3.h>
 #include <drm_fourcc.h>
 #include <fcntl.h>
@@ -23,9 +26,57 @@
 #define MODULE_DATA_SYMBOL "sauceModuleData"
 #define SOCKET_PATH_ENV "MEATBALL_TEST_SOCKET"
 #define SOCKET_MODE_ENV "MEATBALL_TEST_SOCKET_MODE"
+#define TOUCHPAD_ENV "MEATBALL_TEST_TOUCHPAD"
+#define TOUCHPAD_NAME "Meatball test touchpad"
+#define TEST_SCROLL_INCREMENT 20.0
+
+enum
+{
+    TEST_SCROLL_VERTICAL = 2,
+    TEST_SCROLL_HORIZONTAL,
+    TEST_SCROLL_AXES,
+};
 
 extern void __real_InitExtensions (int argc, char **argv);
 extern void __wrap_InitExtensions (int argc, char **argv);
+
+static int
+test_touchpad_control (DeviceIntPtr device, int what)
+{
+    CARD8 buttons[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    Atom labels[ARRAY_SIZE (buttons) - 1] = { 0 };
+    Atom axes[TEST_SCROLL_AXES] = { 0 };
+
+    if (what != DEVICE_INIT)
+        return Success;
+    if (!InitPointerDeviceStruct (
+            (DevicePtr)device, buttons, ARRAY_SIZE (labels), labels,
+            (PtrCtrlProcPtr)NoopDDA, GetMotionHistorySize (), TEST_SCROLL_AXES,
+            axes) ||
+        !SetScrollValuator (device, TEST_SCROLL_VERTICAL, SCROLL_TYPE_VERTICAL,
+                            TEST_SCROLL_INCREMENT, SCROLL_FLAG_NONE) ||
+        !SetScrollValuator (device, TEST_SCROLL_HORIZONTAL,
+                            SCROLL_TYPE_HORIZONTAL, TEST_SCROLL_INCREMENT,
+                            SCROLL_FLAG_NONE))
+        return BadAlloc;
+    return Success;
+}
+
+static Bool
+test_touchpad_initialize (ClientPtr client, void *data)
+{
+    DeviceIntPtr device = AddInputDevice (client, test_touchpad_control, TRUE);
+
+    if (!device)
+        FatalError ("meatball-test: could not allocate touchpad\n");
+    device->name = strdup (TOUCHPAD_NAME);
+    device->xinput_type = MakeAtom (XI_TOUCHPAD, strlen (XI_TOUCHPAD), TRUE);
+    device->coreEvents = TRUE;
+    if (!device->name || ActivateDevice (device, TRUE) != Success ||
+        !EnableDevice (device, TRUE))
+        FatalError ("meatball-test: could not enable touchpad\n");
+    return TRUE;
+}
 
 #ifdef DRI3
 #define TEST_DRI3_ENV "MEATBALL_TEST_DRI3"
@@ -198,4 +249,7 @@ __wrap_InitExtensions (int argc, char **argv)
     }
 #endif
     __real_InitExtensions (argc, argv);
+    if (getenv (TOUCHPAD_ENV) &&
+        !QueueWorkProc (test_touchpad_initialize, serverClient, NULL))
+        FatalError ("meatball-test: could not schedule touchpad setup\n");
 }
