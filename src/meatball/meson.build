@@ -44,6 +44,7 @@ srcs_meatball = [
     'native_window.c',
     'native_surface.c',
     'native_subsurface.c',
+    'native_buffer.c',
     'native_shm.c',
     'native_render.c',
     'native_xdg.c',

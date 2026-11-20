@@ -5,10 +5,8 @@
 #include <errno.h>
 #include <extnsionst.h>
 #include <fcntl.h>
-#include <gcstruct.h>
 #include <picturestr.h>
 #include <pixmapstr.h>
-#include <servermd.h>
 #include <shmint.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -18,7 +16,6 @@
 #define MB_SHM_VERSION 1
 #define SHM_EXTENSION_NAME "MIT-SHM"
 #define RENDER_EXTENSION_NAME "RENDER"
-#define MB_ALL_PLANES (~0UL)
 
 struct MbShmPool
 {
@@ -26,6 +23,14 @@ struct MbShmPool
     int32_t size;
     unsigned int refs;
 };
+
+typedef struct
+{
+    MbBuffer base;
+    struct MbShmPool *pool;
+    int32_t stride, offset;
+    uint32_t format;
+} MbShmBuffer;
 
 static void
 pool_unref (struct MbShmPool *pool)
@@ -37,46 +42,33 @@ pool_unref (struct MbShmPool *pool)
     }
 }
 
-void
-mb_shm_buffer_unref (MbShmBuffer *buffer)
-{
-    if (!--buffer->refs)
-    {
-        pool_unref (buffer->pool);
-        free (buffer);
-    }
-}
-
 static void
-buffer_destroyed (struct wl_resource *resource)
+shm_buffer_destroy (MbBuffer *base)
 {
-    MbShmBuffer *buffer = wl_resource_get_user_data (resource);
+    MbShmBuffer *buffer = (MbShmBuffer *)base;
 
-    buffer->resource = NULL;
-    mb_shm_buffer_unref (buffer);
+    pool_unref (buffer->pool);
+    free (buffer);
 }
 
-static void
-buffer_destroy (struct wl_client *client, struct wl_resource *resource)
+static PixmapPtr
+shm_snapshot (MbBuffer *base, ScreenPtr screen)
 {
-    wl_resource_destroy (resource);
-}
+    MbShmBuffer *buffer = (MbShmBuffer *)base;
+    unsigned int depth = buffer->format == WL_SHM_FORMAT_ARGB8888
+                             ? MB_SHM_ARGB_DEPTH
+                             : MB_SHM_XRGB_DEPTH;
+    PixmapPtr imported = shm_create_pixmap_from_fd (
+        screen, buffer->pool->fd, base->width, base->height, depth,
+        MB_SHM_BITS_PER_PIXEL, buffer->stride, buffer->offset);
+    PixmapPtr copy;
 
-static const struct wl_buffer_interface buffer_implementation = {
-    .destroy = buffer_destroy,
-};
-
-MbShmBuffer *
-mb_shm_buffer_acquire (struct wl_resource *resource)
-{
-    MbShmBuffer *buffer;
-
-    if (!resource || !wl_resource_instance_of (resource, &wl_buffer_interface,
-                                               &buffer_implementation))
+    if (!imported)
         return NULL;
-    buffer = wl_resource_get_user_data (resource);
-    buffer->refs++;
-    return buffer;
+    /* Spaghetti's imported pixmap guards reads against SIGBUS. */
+    copy = mb_pixmap_snapshot (imported, FALSE);
+    screen->DestroyPixmap (imported);
+    return copy;
 }
 
 static void
@@ -139,9 +131,13 @@ pool_create_buffer (struct wl_client *client, struct wl_resource *resource,
         wl_resource_post_no_memory (resource);
         return;
     }
-    buffer->resource =
-        wl_resource_create (client, &wl_buffer_interface, 1, id);
-    if (!buffer->resource)
+    buffer->base = (MbBuffer){
+        .width = width,
+        .height = height,
+        .snapshot = shm_snapshot,
+        .destroy = shm_buffer_destroy,
+    };
+    if (!mb_buffer_publish (&buffer->base, client, id))
     {
         free (buffer);
         wl_resource_post_no_memory (resource);
@@ -149,14 +145,9 @@ pool_create_buffer (struct wl_client *client, struct wl_resource *resource,
     }
     buffer->pool = pool;
     pool->refs++;
-    buffer->refs = 1;
-    buffer->width = width;
-    buffer->height = height;
     buffer->stride = stride;
     buffer->offset = offset;
     buffer->format = format;
-    wl_resource_set_implementation (buffer->resource, &buffer_implementation,
-                                    buffer, buffer_destroyed);
 }
 
 static const struct wl_shm_pool_interface pool_implementation = {
@@ -268,53 +259,4 @@ mb_shm_shutdown (void)
         wl_global_destroy (compositor.shm_global);
         compositor.shm_global = NULL;
     }
-}
-
-PixmapPtr
-mb_shm_snapshot (MbShmBuffer *buffer, ScreenPtr screen)
-{
-    unsigned int depth = buffer->format == WL_SHM_FORMAT_ARGB8888
-                             ? MB_SHM_ARGB_DEPTH
-                             : MB_SHM_XRGB_DEPTH;
-    size_t stride = PixmapBytePad (buffer->width, depth);
-    size_t size = stride * buffer->height;
-    PixmapPtr imported, copy = NULL;
-    GCPtr gc = NULL;
-    char *pixels;
-
-    if (size > MB_SHM_MAX_SNAPSHOT_BYTES)
-        return NULL;
-    pixels = malloc (size);
-    if (!pixels)
-        return NULL;
-    imported = shm_create_pixmap_from_fd (
-        screen, buffer->pool->fd, buffer->width, buffer->height, depth,
-        MB_SHM_BITS_PER_PIXEL, buffer->stride, buffer->offset);
-    if (!imported)
-        goto done;
-    /* The imported pixmap uses Spaghetti's SIGBUS protection. Copy through
-     * the screen APIs so client memory is consumed before buffer release.
-     */
-    screen->GetImage (&imported->drawable, 0, 0, buffer->width, buffer->height,
-                      ZPixmap, MB_ALL_PLANES, pixels);
-    screen->DestroyPixmap (imported);
-    copy =
-        screen->CreatePixmap (screen, buffer->width, buffer->height, depth, 0);
-    if (!copy)
-        goto done;
-    gc = GetScratchGC (depth, screen);
-    if (!gc)
-    {
-        screen->DestroyPixmap (copy);
-        copy = NULL;
-        goto done;
-    }
-    ValidateGC (&copy->drawable, gc);
-    gc->ops->PutImage (&copy->drawable, gc, depth, 0, 0, buffer->width,
-                       buffer->height, 0, ZPixmap, pixels);
-    FreeScratchGC (gc);
-
-done:
-    free (pixels);
-    return copy;
 }
