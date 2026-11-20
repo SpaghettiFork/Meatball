@@ -275,6 +275,9 @@ surface_output (MbClient *client, const void *message, size_t size)
             return;
         window = event->u.expose.window;
         break;
+    case UnmapNotify:
+        window = event->u.unmapNotify.window;
+        break;
     case ConfigureNotify:
         window = event->u.configureNotify.window;
         break;
