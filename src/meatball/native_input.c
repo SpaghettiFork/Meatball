@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "pointer-constraints.h"
+#include "relative-pointer.h"
 #include "server.h"
 
 #include <X11/extensions/XI2.h>
@@ -10,6 +11,7 @@
 #include <extnsionst.h>
 #include <inputstr.h>
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <regionstr.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +23,7 @@
 
 #define SEAT_VERSION 5
 #define CONSTRAINTS_VERSION 1
+#define RELATIVE_POINTER_VERSION 1
 #define SEAT_NAME_FORMAT "spaghetti-seat-%d-%d"
 #define SEAT_NAME_SIZE 64
 #define INPUT_QUEUE_LIMIT (1024 * 1024)
@@ -38,6 +41,7 @@
 #define SCROLL_STEP 10
 #define FIXED_16_ONE 65536.0
 #define MILLISECONDS_PER_SECOND 1000
+#define MICROSECONDS_PER_MILLISECOND 1000
 #define INVALID_KEYMAP_FD (-1)
 #define INPUT_SERIAL_LIMIT 128
 
@@ -46,6 +50,7 @@ enum ResourceKind
     RESOURCE_SEAT,
     RESOURCE_POINTER,
     RESOURCE_KEYBOARD,
+    RESOURCE_RELATIVE_POINTER,
 };
 
 enum InputKind
@@ -54,6 +59,14 @@ enum InputKind
     INPUT_STATE,
     INPUT_KEYMAP,
     INPUT_CONTROLS,
+    INPUT_RELATIVE_MOTION,
+};
+
+struct RelativeMotion
+{
+    uint64_t time;
+    wl_fixed_t dx, dy, dx_unaccel, dy_unaccel;
+    int grab_client;
 };
 
 struct Modifiers
@@ -116,6 +129,7 @@ struct MbSeat
     ScreenPtr drag_screen;
     unsigned char keys[DOWN_LENGTH], buttons[DOWN_LENGTH];
     unsigned int button_count, grab_button;
+    unsigned int relative_pointers;
     wl_fixed_t pointer_x, pointer_y;
     int32_t root_x, root_y;
     double root_pointer_x, root_pointer_y;
@@ -155,11 +169,11 @@ struct InputEvent
 
 struct MbInput
 {
-    struct wl_global *constraints_global;
+    struct wl_global *constraints_global, *relative_pointer_global;
     struct wl_list seats, events;
     size_t queued;
     int xi_opcode;
-    Bool callback_registered;
+    Bool callback_registered, relative_motion_registered;
 };
 
 static uint64_t next_seat_lifetime;
@@ -249,6 +263,8 @@ resource_destroyed (struct wl_resource *resource)
 {
     struct InputResource *input = wl_resource_get_user_data (resource);
 
+    if (input->kind == RESOURCE_RELATIVE_POINTER)
+        input->seat->relative_pointers--;
     wl_list_remove (&input->link);
     free (input);
 }
@@ -501,6 +517,51 @@ static const struct wl_pointer_interface pointer_implementation = {
     .set_cursor = set_cursor,
     .release = release,
 };
+
+static const struct zwp_relative_pointer_v1_interface
+    relative_pointer_implementation = {
+        .destroy = release,
+    };
+
+static void
+get_relative_pointer (struct wl_client *client, struct wl_resource *resource,
+                      uint32_t id, struct wl_resource *pointer)
+{
+    struct InputResource *binding = wl_resource_get_user_data (pointer);
+    struct MbSeat *seat = binding->seat;
+
+    if (!create_resource (client, seat, RESOURCE_RELATIVE_POINTER,
+                          &zwp_relative_pointer_v1_interface,
+                          wl_resource_get_version (resource), id,
+                          &relative_pointer_implementation))
+    {
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    seat->relative_pointers++;
+}
+
+static const struct zwp_relative_pointer_manager_v1_interface
+    relative_pointer_manager_implementation = {
+        .destroy = release,
+        .get_relative_pointer = get_relative_pointer,
+    };
+
+static void
+bind_relative_pointer_manager (struct wl_client *client, void *data,
+                               uint32_t version, uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create (
+        client, &zwp_relative_pointer_manager_v1_interface, version, id);
+
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
+    wl_resource_set_implementation (
+        resource, &relative_pointer_manager_implementation, NULL, NULL);
+}
 
 static const struct wl_keyboard_interface keyboard_implementation = {
     .release = release,
@@ -1354,6 +1415,63 @@ retire_seat (struct MbSeat *seat)
     if (seat->keymap_fd != INVALID_KEYMAP_FD)
         close (seat->keymap_fd);
     seat->keymap_fd = INVALID_KEYMAP_FD;
+}
+
+static wl_fixed_t
+relative_delta (double value)
+{
+    const double scale = wl_fixed_from_int (1);
+
+    if (!isfinite (value))
+        return 0;
+    if (value >= INT32_MAX / scale)
+        return INT32_MAX;
+    if (value <= INT32_MIN / scale)
+        return INT32_MIN;
+    return wl_fixed_from_double (value);
+}
+
+static void
+native_relative_motion (CallbackListPtr *callbacks, void *closure, void *data)
+{
+    const RelativeMotionInfoRec *motion = data;
+    DeviceIntPtr pointer = motion->device;
+    struct MbSeat *seat = find_seat (pointer->id);
+    GrabPtr grab = pointer->deviceGrab.grab;
+    MbSurface *root = NULL;
+    struct InputEvent *event;
+    uint64_t now_ms;
+    int32_t offset_ms;
+
+    if (!seat || !seat->relative_pointers || seat->retire_pending)
+        return;
+    if (!grab)
+    {
+        root = root_for_window (GetSpriteWindow (pointer));
+        if (!root)
+            return;
+    }
+
+    event = queue_event (compositor.bridge_client, seat, INPUT_RELATIVE_MOTION,
+                         sizeof (struct RelativeMotion));
+    if (!event)
+        return;
+
+    /* Recover the full timestamp from the wrapping millisecond event clock. */
+    now_ms = GetTimeInMicros () / MICROSECONDS_PER_MILLISECOND;
+    offset_ms = (int32_t)(motion->time - (uint32_t)now_ms);
+    struct RelativeMotion relative = {
+        .time = (now_ms + offset_ms) * MICROSECONDS_PER_MILLISECOND,
+        .dx = relative_delta (motion->dx),
+        .dy = relative_delta (motion->dy),
+        .dx_unaccel = relative_delta (motion->dx_unaccel),
+        .dy_unaccel = relative_delta (motion->dy_unaccel),
+        .grab_client = grab ? CLIENT_ID (grab->resource) : 0,
+    };
+
+    event->target_client = root ? root->client->lifetime : 0;
+    event->target_window = root ? root->window.id : None;
+    memcpy (event->data, &relative, sizeof (relative));
 }
 
 static MbSurface *
@@ -2330,6 +2448,42 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
     }
 }
 
+static void
+dispatch_relative_motion (struct MbSeat *seat, struct InputEvent *event)
+{
+    MbSurface *focus = seat->pointer_focus;
+    MbSurface *root;
+    struct InputResource *input;
+    struct RelativeMotion relative;
+
+    if (!focus || focus->client->failed || seat->drag_owner ||
+        seat->retire_pending)
+        return;
+    root = mb_subsurface_root (focus);
+    if (!root)
+        return;
+    memcpy (&relative, event->data, sizeof (relative));
+    if (relative.grab_client)
+    {
+        if (relative.grab_client != focus->client->native->index)
+            return;
+    }
+    else if (event->target_client != focus->client->lifetime ||
+             event->target_window != root->window.id)
+        return;
+
+    wl_list_for_each (input, &seat->resources, link)
+    {
+        if (input->kind != RESOURCE_RELATIVE_POINTER ||
+            input->client != focus->client)
+            continue;
+        zwp_relative_pointer_v1_send_relative_motion (
+            input->resource, (uint32_t)(relative.time >> 32),
+            (uint32_t)relative.time, relative.dx, relative.dy,
+            relative.dx_unaccel, relative.dy_unaccel);
+    }
+}
+
 Bool
 mb_input_dispatch (void)
 {
@@ -2362,6 +2516,9 @@ mb_input_dispatch (void)
         {
         case INPUT_XI:
             dispatch_xi (seat, event);
+            break;
+        case INPUT_RELATIVE_MOTION:
+            dispatch_relative_motion (seat, event);
             break;
         case INPUT_STATE:
             modifiers_changed (seat, event->modifiers);
@@ -2544,6 +2701,11 @@ mb_input_initialize (void)
         CONSTRAINTS_VERSION, NULL, bind_constraints);
     if (!input->constraints_global)
         goto fail;
+    input->relative_pointer_global = wl_global_create (
+        compositor.wl_display, &zwp_relative_pointer_manager_v1_interface,
+        RELATIVE_POINTER_VERSION, NULL, bind_relative_pointer_manager);
+    if (!input->relative_pointer_global)
+        goto fail;
     compositor.bridge_client->native->xkbClientFlags |= _XkbClientInitialized;
     compositor.bridge_client->native->mapNotifyMask = XkbAllMapComponentsMask;
     compositor.bridge_client->native->newKeyboardNotifyMask =
@@ -2551,6 +2713,9 @@ mb_input_initialize (void)
     if (!AddCallback (&EventCallback, native_event, NULL))
         goto fail;
     input->callback_registered = TRUE;
+    if (!AddCallback (&RelativeMotionCallback, native_relative_motion, NULL))
+        goto fail;
+    input->relative_motion_registered = TRUE;
     XISetMask (mask, XI_HierarchyChanged);
     XISetMask (mask, XI_DeviceChanged);
     for (screen = 0; screen < screenInfo.numScreens; screen++)
@@ -2587,12 +2752,16 @@ mb_input_shutdown (void)
         return;
     if (input->callback_registered)
         DeleteCallback (&EventCallback, native_event, NULL);
+    if (input->relative_motion_registered)
+        DeleteCallback (&RelativeMotionCallback, native_relative_motion, NULL);
     wl_list_for_each_safe (event, next_event, &input->events, link)
     {
         free_event (event);
     }
     if (input->constraints_global)
         wl_global_destroy (input->constraints_global);
+    if (input->relative_pointer_global)
+        wl_global_destroy (input->relative_pointer_global);
     compositor.input = NULL;
     wl_list_for_each_safe (seat, next_seat, &input->seats, link)
     {

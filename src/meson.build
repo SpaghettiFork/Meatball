@@ -32,6 +32,7 @@ endif
 
 if not cc.compiles('''
     #include <xorg-server.h>
+    #include <dix.h>
     #include <dixstruct.h>
     #include <external.h>
     #include <present.h>
@@ -43,6 +44,7 @@ if not cc.compiles('''
                    "Spaghetti SHM import requires a 32-bit stride");
     int main(void) {
         ExternalClientCallbacks callbacks = {0};
+        (void) sizeof (&RelativeMotionCallback);
         return sizeof(callbacks) == 0;
     }
 ''', dependencies: server_sdk, name: 'Spaghetti native extension SDK')
