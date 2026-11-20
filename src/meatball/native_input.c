@@ -81,8 +81,8 @@ struct MbSeat
     MbSurface *popup_grab;
     uint32_t popup_serial;
     uint32_t enter_serial, button_serial;
-    struct InputSerial serials[INPUT_SERIAL_LIMIT];
     unsigned int serial_index;
+    struct InputSerial serials[INPUT_SERIAL_LIMIT];
     uint64_t drag_owner;
     uint32_t drag_enter_serial;
     ScreenPtr drag_screen;

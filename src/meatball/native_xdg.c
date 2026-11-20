@@ -288,9 +288,9 @@ struct MbXdgSurface
     struct PopupGeometry last_popup;
     int32_t popup_x, popup_y;
     Bool dismissed;
+    unsigned int refs;
     uint64_t grab_seat;
     MbSurface *surface;
-    unsigned int refs;
     struct wl_list configures;
     unsigned int configure_count;
     Bool initialized, configured, map_requested, updating_state;
