@@ -676,7 +676,7 @@ capture_commit (MbSurface *surface)
                     surface->window.screen)
                     goto fail;
             }
-            else
+            else if (!buffer->solid)
             {
                 PixmapPtr copy =
                     buffer->snapshot (buffer, surface->window.screen);
@@ -689,9 +689,9 @@ capture_commit (MbSurface *surface)
                 if (!AddResource (id, RT_PIXMAP, copy))
                     goto fail;
                 attached->pixels = id;
-                if (buffer->resource)
-                    wl_buffer_send_release (buffer->resource);
             }
+            if (!buffer->imported && buffer->resource)
+                wl_buffer_send_release (buffer->resource);
             commit->offset_x = surface->pending_x;
             commit->offset_y = surface->pending_y;
         }

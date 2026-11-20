@@ -108,6 +108,9 @@ if spaghetti_build_dir != ''
     test('native-viewport', python,
          args: ['-B', files('native_viewport.py'), test_host, sauce],
          timeout: 30)
+    test('native-single-pixel', python,
+         args: ['-B', files('native_single_pixel.py'), test_host, sauce],
+         timeout: 30)
     loop_probe = shared_module('meatball-loop-probe', ['probe.c', 'loop_probe.c'],
                                dependencies: [common_dep, meatball_headers],
                                c_args: ['-UNDEBUG'],
