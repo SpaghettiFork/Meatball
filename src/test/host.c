@@ -14,6 +14,7 @@
 #include <dri3.h>
 #include <drm_fourcc.h>
 #include <fcntl.h>
+#include <pixmapstr.h>
 #include <shmint.h>
 #endif
 
@@ -31,6 +32,10 @@ extern void __wrap_InitExtensions (int argc, char **argv);
 #define TEST_DRI3_NO_DEVICE "no-device"
 #define TEST_DRI3_ASYNC "async"
 #define TEST_DEVICE "/dev/null"
+#define TEST_ARGB_DEPTH 32
+
+static DevPrivateKeyRec test_dri3_pixmap_key;
+static GetImageProcPtr test_dri3_get_image;
 
 static Bool
 test_dri3_open_ready (ClientPtr client, void *data)
@@ -98,16 +103,34 @@ test_dri3_modifiers (ScreenPtr screen, uint32_t format, uint32_t *count,
     return TRUE;
 }
 
+static void
+test_dri3_check_image (DrawablePtr drawable, int x, int y, int width,
+                       int height, unsigned int format, unsigned long mask,
+                       char *pixels)
+{
+    if (drawable->type == DRAWABLE_PIXMAP &&
+        dixLookupPrivate (&((PixmapPtr)drawable)->devPrivates,
+                          &test_dri3_pixmap_key))
+        FatalError ("meatball-test: DMA-BUF snapshot used GetImage\n");
+    test_dri3_get_image (drawable, x, y, width, height, format, mask, pixels);
+}
+
 static PixmapPtr
 test_dri3_import (ScreenPtr screen, CARD8 count, const int *fds, CARD16 width,
                   CARD16 height, const CARD32 *strides, const CARD32 *offsets,
                   CARD8 depth, CARD8 bpp, CARD64 modifier)
 {
+    PixmapPtr pixmap;
+
     if (count != 1)
         return NULL;
     /* A test-only driver backed by the server's guarded SHM pixmaps. */
-    return shm_create_pixmap_from_fd (screen, fds[0], width, height, depth,
-                                      bpp, strides[0], offsets[0]);
+    pixmap = shm_create_pixmap_from_fd (screen, fds[0], width, height, depth,
+                                        bpp, strides[0], offsets[0]);
+    /* The ARGB fixture uses the Y-inversion readback path. */
+    if (pixmap && depth != TEST_ARGB_DEPTH)
+        dixSetPrivate (&pixmap->devPrivates, &test_dri3_pixmap_key, pixmap);
+    return pixmap;
 }
 
 static const dri3_screen_info_rec test_dri3 = {
@@ -155,9 +178,17 @@ __wrap_InitExtensions (int argc, char **argv)
     }
 
 #ifdef DRI3
-    if (getenv (TEST_DRI3_ENV) &&
-        !dri3_screen_init (screenInfo.screens[0], &test_dri3))
-        FatalError ("meatball-test: DRI3 test driver initialization failed\n");
+    if (getenv (TEST_DRI3_ENV))
+    {
+        ScreenPtr screen = screenInfo.screens[0];
+
+        if (!dri3_screen_init (screen, &test_dri3) ||
+            !dixRegisterPrivateKey (&test_dri3_pixmap_key, PRIVATE_PIXMAP, 0))
+            FatalError (
+                "meatball-test: DRI3 test driver initialization failed\n");
+        test_dri3_get_image = screen->GetImage;
+        screen->GetImage = test_dri3_check_image;
+    }
 #endif
     __real_InitExtensions (argc, argv);
 }
