@@ -29,9 +29,14 @@ SET_ANCHOR = 3
 SET_GRAVITY = 4
 SET_ADJUSTMENT = 5
 SET_OFFSET = 6
+SET_REACTIVE = 7
+SET_PARENT_SIZE = 8
+SET_PARENT_CONFIGURE = 9
 GET_POPUP = 2
 POPUP_DESTROY = 0
 POPUP_GRAB = 1
+POPUP_REPOSITION = 2
+POPUP_REPOSITIONED = 2
 POPUP_DONE = 1
 ESCAPE = 1 + KEYCODE_OFFSET
 BOTTOM_RIGHT = 8
@@ -63,10 +68,9 @@ def geometry(x11, window):
     return struct.unpack_from("<hhHH", reply, 12)
 
 
-def new_popup(client, parent, size=(20, 24), anchor=(40, 35, 5, 5),
-              adjustment=FLIP_X | SLIDE_Y, offset=(0, 0)):
-    surface = create_surface(client, client.compositor)
-    positioner, shell, popup = (client.allocate_id() for _ in range(3))
+def make_positioner(client, size, anchor, adjustment, offset=(0, 0), *,
+                    reactive=False, parent_size=None, parent_serial=None):
+    positioner = client.allocate_id()
     client.send(client.base, CREATE_POSITIONER, struct.pack("=I", positioner))
     client.send(positioner, SET_SIZE, struct.pack("=ii", *size))
     client.send(positioner, SET_ANCHOR_RECT, struct.pack("=iiii", *anchor))
@@ -74,6 +78,20 @@ def new_popup(client, parent, size=(20, 24), anchor=(40, 35, 5, 5),
     client.send(positioner, SET_GRAVITY, struct.pack("=I", BOTTOM_RIGHT))
     client.send(positioner, SET_ADJUSTMENT, struct.pack("=I", adjustment))
     client.send(positioner, SET_OFFSET, struct.pack("=ii", *offset))
+    if reactive:
+        client.send(positioner, SET_REACTIVE)
+    if parent_size is not None:
+        client.send(positioner, SET_PARENT_SIZE, struct.pack("=ii", *parent_size))
+    if parent_serial is not None:
+        client.send(positioner, SET_PARENT_CONFIGURE, struct.pack("=I", parent_serial))
+    return positioner
+
+
+def new_popup(client, parent, size=(20, 24), anchor=(40, 35, 5, 5),
+              adjustment=FLIP_X | SLIDE_Y, offset=(0, 0)):
+    surface = create_surface(client, client.compositor)
+    positioner = make_positioner(client, size, anchor, adjustment, offset)
+    shell, popup = (client.allocate_id() for _ in range(2))
     client.send(client.base, XDG_GET_SURFACE, struct.pack("=II", shell, surface))
     client.send(shell, GET_POPUP, struct.pack("=III", popup, parent, positioner))
     client.send(positioner, POSITIONER_DESTROY)
@@ -106,18 +124,18 @@ def parent_window(client, actor, root):
     # The geometry begins inside the root buffer.
     client.send(client.xdg, XDG_GEOMETRY, struct.pack("=iiii", 2, 3, WIDTH, HEIGHT))
     client.commit()
-    client.configure()
+    serial, _, _ = client.configure()
     publish(client, client.surface, solid(PARENT_COLOR, WIDTH + 4, HEIGHT + 6))
     move(actor, window, PARENT_X, PARENT_Y)
     client.sync()
-    return window
+    return window, serial
 
 
 def check_popup(path, actor, root):
-    client = XdgClient(path)
+    client = XdgClient(path, shell_version=1)
     x11 = actor.connection
     try:
-        window = parent_window(client, actor, root)
+        window, _ = parent_window(client, actor, root)
         before = query_tree(x11, root)
         surface, shell, popup = new_popup(client, client.xdg)
         rect = configure_popup(client, surface, shell, popup)
@@ -156,6 +174,100 @@ def check_popup(path, actor, root):
         client.close()
 
 
+def popup_events(events, shell, popup):
+    return [(resource, opcode, data) for resource, opcode, data in events
+            if (resource == shell and opcode == CONFIGURE_EVENT)
+            or (resource == popup and opcode in (CONFIGURE_EVENT, POPUP_REPOSITIONED))]
+
+
+def reposition(client, popup, token, positioner):
+    client.send(popup, POPUP_REPOSITION, struct.pack("=II", positioner, token))
+    client.send(positioner, POSITIONER_DESTROY)
+
+
+def check_reposition(path, actor, root):
+    client = XdgClient(path, shell_version=3)
+    x11 = actor.connection
+    try:
+        parent, parent_serial = parent_window(client, actor, root)
+        before = query_tree(x11, root)
+        surface, shell, popup = new_popup(client, client.xdg)
+        assert configure_popup(client, surface, shell, popup) == (20, 38, 20, 24)
+        publish(client, surface, solid(POPUP_COLOR, 20, 24))
+        native, = query_tree(x11, root) - before
+
+        before = query_tree(x11, root)
+        sub = new_popup(client, shell, size=(10, 8), anchor=(2, 2, 1, 1),
+                        adjustment=0)
+        configure_popup(client, *sub)
+        publish(client, sub[0], solid(POPUP_COLOR, 10, 8))
+        nested, = query_tree(x11, root) - before
+
+        def check_geometry(x, y, width=20, height=24, parent_x=PARENT_X, parent_y=PARENT_Y):
+            assert geometry(x11, native) == (parent_x + x, parent_y + y, width, height)
+            assert geometry(x11, nested) == (parent_x + x + 3, parent_y + y + 3, 10, 8)
+
+        # Two replies remain outstanding. Each acknowledgement selects its
+        # own placement and an acknowledgement alone does not move the popup.
+        reposition(client, popup, 0, make_positioner(
+            client, (20, 24), (2, 3, 1, 1), 0, offset=(4, 5)))
+        reposition(client, popup, 17, make_positioner(
+            client, (18, 12), (12, 10, 1, 1), 0, parent_size=(WIDTH, HEIGHT),
+            parent_serial=parent_serial))
+        events = popup_events(client.roundtrip_events(), shell, popup)
+        assert len(events) == 6, events
+        assert events[:2] == [(popup, POPUP_REPOSITIONED, struct.pack("=I", 0)),
+                             (popup, CONFIGURE_EVENT, struct.pack("=iiii", 7, 9, 20, 24))]
+        assert events[2][:2] == (shell, CONFIGURE_EVENT)
+        assert events[3:5] == [(popup, POPUP_REPOSITIONED, struct.pack("=I", 17)),
+                              (popup, CONFIGURE_EVENT, struct.pack("=iiii", 13, 11, 18, 12))]
+        assert events[5][:2] == (shell, CONFIGURE_EVENT)
+        client.send(surface, COMMIT)
+        client.sync()
+        check_geometry(20, 38)
+        client.send(shell, XDG_ACK_CONFIGURE, events[2][2])
+        client.sync()
+        check_geometry(20, 38)
+        client.send(surface, COMMIT)
+        client.sync()
+        check_geometry(7, 9)
+        client.send(shell, XDG_ACK_CONFIGURE, events[5][2])
+        publish(client, surface, solid(PARENT_COLOR, 18, 12))
+        check_geometry(13, 11, 18, 12)
+        assert image(x11, native, 18, 12) == (PARENT_COLOR,) * (18 * 12)
+
+        # Replacing the positioner opts in to reconstraining on parent movement.
+        reposition(client, popup, 23, make_positioner(
+            client, (20, 24), (40, 35, 5, 5), FLIP_X | SLIDE_Y, reactive=True))
+        events = popup_events(client.roundtrip_events(), shell, popup)
+        assert [event[:2] for event in events] == [
+            (popup, POPUP_REPOSITIONED), (popup, CONFIGURE_EVENT), (shell, CONFIGURE_EVENT)]
+        assert struct.unpack("=I", events[0][2]) == (23,)
+        assert struct.unpack("=iiii", events[1][2]) == (20, 38, 20, 24)
+        client.send(shell, XDG_ACK_CONFIGURE, events[2][2])
+        publish(client, surface, solid(POPUP_COLOR, 20, 24))
+        check_geometry(20, 38)
+
+        moved_x, moved_y = PARENT_X - 60, PARENT_Y - 60
+        move(actor, parent, moved_x, moved_y)
+        events = popup_events(client.roundtrip_events(), shell, popup)
+        assert [event[:2] for event in events] == [(popup, CONFIGURE_EVENT), (shell, CONFIGURE_EVENT)]
+        assert struct.unpack("=iiii", events[0][2]) == (45, 40, 20, 24)
+        check_geometry(20, 38, parent_x=moved_x, parent_y=moved_y)
+        client.send(shell, XDG_ACK_CONFIGURE, events[1][2])
+        client.send(surface, COMMIT)
+        assert not popup_events(client.roundtrip_events(), shell, popup)
+        check_geometry(45, 40, parent_x=moved_x, parent_y=moved_y)
+
+        move(actor, parent, moved_x - 1, moved_y)
+        assert not popup_events(client.roundtrip_events(), shell, popup)
+        check_geometry(45, 40, parent_x=moved_x - 1, parent_y=moved_y)
+        destroy_popup(client, *sub)
+        destroy_popup(client, surface, shell, popup)
+    finally:
+        client.close()
+
+
 def start_grab(client, popup, serial):
     client.send(popup, POPUP_GRAB, struct.pack("=II", client.seat, serial))
 
@@ -170,7 +282,7 @@ def check_grab(path, actor, root):
     client = InputClient(path)
     x11 = actor.connection
     try:
-        window = parent_window(client, actor, root)
+        window, _ = parent_window(client, actor, root)
         actor.focus(window)
         client.until(client.keyboard, KEYBOARD_ENTER)
         actor.fake(MOTION, x=PARENT_X + 6, y=PARENT_Y + 6)
@@ -267,8 +379,8 @@ def check_grab(path, actor, root):
 
 
 def check_popup_errors(path, actor, root):
-    for failure in ("parent", "after-map", "stack"):
-        client = XdgClient(path)
+    for failure in ("parent", "after-map", "stack", "reposition", "version"):
+        client = XdgClient(path, shell_version=1 if failure == "version" else 3)
         try:
             if failure != "parent":
                 parent_window(client, actor, root)
@@ -283,6 +395,12 @@ def check_popup_errors(path, actor, root):
                     seat = client.bind("wl_seat")
                     client.send(menu[2], POPUP_GRAB, struct.pack("=II", seat, 1))
                     expected = (menu[2], 0)
+                elif failure in ("reposition", "version"):
+                    positioner = client.allocate_id()
+                    client.send(client.base, CREATE_POSITIONER, struct.pack("=I", positioner))
+                    client.send(menu[2], POPUP_REPOSITION,
+                                struct.pack("=II", positioner, 9))
+                    expected = (client.base, 5) if failure == "reposition" else (1, 1)
                 else:
                     sub = new_popup(client, menu[1], size=(10, 8),
                                     anchor=(2, 2, 1, 1), adjustment=0)
@@ -318,6 +436,7 @@ def main():
                 root = root_window(setup)
                 actor = XInput(x11, root)
                 check_popup(path, actor, root)
+                check_reposition(path, actor, root)
                 check_grab(path, actor, root)
                 check_popup_errors(path, actor, root)
                 assert process.poll() is None

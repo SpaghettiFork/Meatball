@@ -189,9 +189,9 @@ the client can reuse its storage while the window retains its pixels.
 
 ### Toplevels
 
-Version 1 xdg toplevels support configure acknowledgements, titles,
-application IDs, parent windows, size hints, WM state requests, close
-requests, unmapping, and remapping.
+Xdg-shell is advertised at version 3. Toplevels support configure
+acknowledgements, titles, application IDs, parent windows, size hints, WM state
+requests, close requests, unmapping, and remapping.
 
 Toplevels use client-side decorations and request an undecorated X11 window
 through `_MOTIF_WM_HINTS`. Window geometry supplies `_GTK_FRAME_EXTENTS` for
@@ -216,8 +216,8 @@ extents, and size hints.
 
 ### Popups
 
-Version 1 xdg-shell popups use override-redirect X11 windows and support
-nested menus. Positioners place popups relative to the parent's committed
+Xdg-shell popups use override-redirect X11 windows and support nested menus.
+Positioners place popups relative to the parent's committed
 window geometry and apply flip, slide, and resize constraints against the
 RandR output at the anchor. Popups follow parent movement and are dismissed
 in reverse stacking order when a parent unmaps.
@@ -227,7 +227,15 @@ acquire the seat's X11 pointer and keyboard devices. Pointer events continue
 to reach surfaces owned by the same client, and the topmost grabbing popup
 receives keyboard focus. Outside clicks on other X11 windows, Escape, and
 seat removal dismiss the grab stack. Destroying a nested popup returns the
-grab to its parent. Popup reposition requests require xdg-shell version 3.
+grab to its parent.
+
+Version 3 clients can reposition a mapped popup. The server sends the request
+token, the popup geometry, and the surface configure serial in that order.
+The popup moves when the client commits the acknowledgement for that serial.
+Reactive positioners recalculate constraints on parent movement and output
+layout changes. Placement uses the current native parent origin and accepts
+the optional parent size and configure hints without predicting future
+parent geometry.
 
 ### Subsurfaces
 
@@ -373,8 +381,9 @@ Every check runs against the isolated module test host.
   serials, WM messages and properties, size hints, parent inheritance, protocol
   errors, remapping, and resets.
 - `native-popup` checks positioner constraints, pixel readback, parent movement,
-  nested placement and dismissal, serial validation, pointer and keyboard grabs,
-  focus restoration, and grab cleanup on disconnect.
+  nested placement and dismissal, popup reposition tokens and commit ordering,
+  reactive placement, protocol versions, serial validation, pointer and
+  keyboard grabs, focus restoration, and grab cleanup on disconnect.
 - `native-present` checks copied pixels and matches Wayland frame callback
   timestamps to X11 Present pixmap completion events. Later commits wait for
   a separate refresh.

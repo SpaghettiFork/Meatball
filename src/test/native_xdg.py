@@ -67,10 +67,10 @@ def string_argument(value):
 
 
 class XdgClient(Wayland):
-    def __init__(self, path):
+    def __init__(self, path, shell_version=None):
         super().__init__(path)
         self.compositor = self.bind("wl_compositor")
-        self.base = self.bind("xdg_wm_base")
+        self.base = self.bind("xdg_wm_base", shell_version)
         self.shm = self.bind("wl_shm")
         self.surface, self.xdg, self.top = self.add_toplevel()
 
