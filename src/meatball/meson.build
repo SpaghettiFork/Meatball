@@ -68,6 +68,14 @@ system_bell_code = custom_target('native-system-bell-code',
                                  input: system_bell_xml, output: 'xdg-system-bell.c',
                                  command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+single_pixel_xml = 'wayland-proto/single-pixel-buffer-v1.xml'
+single_pixel_header = custom_target('native-single-pixel-header',
+                                    input: single_pixel_xml, output: 'single-pixel-buffer.h',
+                                    command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+single_pixel_code = custom_target('native-single-pixel-code',
+                                  input: single_pixel_xml, output: 'single-pixel-buffer.c',
+                                  command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -106,6 +114,8 @@ srcs_meatball = [
     tearing_control_code,
     system_bell_header,
     system_bell_code,
+    single_pixel_header,
+    single_pixel_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

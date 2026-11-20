@@ -25,6 +25,8 @@ surface_picture (MbSurface *surface)
                    surface->transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
     int error;
 
+    if (buffer->solid)
+        return CreateSolidPicture (None, &buffer->solid_color, &error);
     if (!pixels && dixLookupResourceByType (
                        (void **)&pixels, surface->content->pixels, RT_PIXMAP,
                        surface->client->native, DixReadAccess) != Success)

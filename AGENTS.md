@@ -48,7 +48,7 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
 The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
 linux-dmabuf, pointer-constraints-unstable-v1, relative-pointer-unstable-v1,
-tearing-control-v1, and xdg-system-bell-v1.
+tearing-control-v1, xdg-system-bell-v1, and single-pixel-buffer-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -172,6 +172,12 @@ limited to 32767 in each direction.
 
 Version 1 `wp_viewporter` supports cropping and destination sizing, including
 fractional source rectangles.
+
+Version 1 `wp_single_pixel_buffer_manager_v1` creates immutable 1×1 buffers
+from premultiplied RGBA values. Render uses a solid source with 16-bit
+channels, and viewporter can scale it to the committed surface size. The
+buffer is released on commit and its color stays available for redraws
+until the surface replaces or drops the content.
 
 SHM additionally advertises RGB565 and XRGB1555 when the first X screen has
 the corresponding Render formats. Packed 16-bit rows are copied into
@@ -432,6 +438,8 @@ Every check runs against the isolated module test host.
   geometry, retained pixels after release, and invalid surface state.
 - `native-viewport` checks cropped pixels across buffer orientations and scales,
   fractional rectangles, commit timing, protocol errors, destruction, and resets.
+- `native-single-pixel` checks buffer reuse, viewport resizing after buffer
+  destruction, premultiplied blending, and synchronized subsurface updates.
 - `native-shadows` checks desktop pixels around client shadow margins, preserved
   alpha, compositor ownership changes, resize size hints, geometry commits,
   remapping, and resets.
