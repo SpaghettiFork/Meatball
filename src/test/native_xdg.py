@@ -179,12 +179,12 @@ def close_request(wm, window, protocols, delete_window):
     wm.sendall(struct.pack("<BBHII", SEND_EVENT, 0, 11, window, 0) + event)
 
 
-def make_buffer(client):
+def make_buffer(client, colors=COLORS):
     stride = WIDTH * 4
     fd = os.memfd_create("meatball-xdg-test", os.MFD_CLOEXEC)
     try:
         os.ftruncate(fd, stride * HEIGHT)
-        os.pwrite(fd, struct.pack(f"={len(COLORS)}I", *COLORS), 0)
+        os.pwrite(fd, struct.pack(f"={len(colors)}I", *colors), 0)
         pool = create_pool(client, client.shm, fd, stride * HEIGHT)
         buffer = create_buffer(client, pool, 0, WIDTH, HEIGHT, stride, SHM_XRGB8888)
         client.send(pool, 1)

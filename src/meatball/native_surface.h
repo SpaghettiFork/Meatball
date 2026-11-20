@@ -107,13 +107,15 @@ struct MbSurface
     int64_t native_dx, native_dy;
     struct wl_event_source *frame_timer;
     XID present_event;
-    CARD32 frame_serial;
+    CARD32 frame_serial, present_serial;
+    CARD8 present_kind;
     int present_opcode;
-    Bool present_pending, present_disabled;
+    Bool present_redraw, present_disabled;
 };
 
 extern PicturePtr mb_scene_picture (MbSurface *surface);
-extern Bool mb_surface_redraw (MbSurface *surface);
+extern Bool mb_surface_redraw (MbSurface *surface, WindowPtr window,
+                               CARD32 serial, Bool *submitted);
 extern Bool mb_surface_update (MbSurface *surface);
 extern void mb_surface_commit_apply (MbSurfaceCommit *commit);
 extern void mb_surface_commit_free (MbSurfaceCommit *commit);
