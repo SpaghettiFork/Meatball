@@ -286,7 +286,7 @@ def check_pending_compositor_layout(path, display):
         x11.close()
 
 
-def check_maximized_subsurfaces(path, display, fullscreen=False):
+def check_status_subsurfaces(path, display, state_names=()):
     x11, setup = connect_x11(display, return_setup=True)
     root = root_window(setup)
     before = query_tree(x11, root)
@@ -297,18 +297,22 @@ def check_maximized_subsurfaces(path, display, fullscreen=False):
         client.send(client.xdg, XDG_GEOMETRY,
                     struct.pack("=iiii", 0, 0, SURFACE_SIZE, SURFACE_SIZE))
         map_window(client, x11, root, window=window)
-        state = intern_atom(x11, "_NET_WM_STATE")
-        names = (("_NET_WM_STATE_FULLSCREEN",) if fullscreen else
-                 ("_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT"))
-        maximized = [intern_atom(x11, name) for name in names]
-        x11.sendall(struct.pack("<BBHIIIB3xI", CHANGE_PROPERTY, PROPERTY_REPLACE,
-                                6 + len(maximized), window, state, XA_ATOM,
-                                PROPERTY_FORMAT, len(maximized)) + struct.pack(f"<{len(maximized)}I", *maximized))
-        client.configure()
+        if state_names:
+            state = intern_atom(x11, "_NET_WM_STATE")
+            atoms = [intern_atom(x11, name) for name in state_names]
+            x11.sendall(struct.pack("<BBHIIIB3xI", CHANGE_PROPERTY, PROPERTY_REPLACE,
+                                    6 + len(atoms), window, state, XA_ATOM,
+                                    PROPERTY_FORMAT, len(atoms)) + struct.pack(f"<{len(atoms)}I", *atoms))
+            client.configure()
         client.sync()
         watcher = Watcher(display, window)
         for _ in range(REPAINT_COUNT):
             status, role = child(client, client.surface, -1, STATUS_Y, desync=True)
+            if not state_names:
+                region = client.allocate_id()
+                client.send(client.compositor, CREATE_REGION, struct.pack("=I", region))
+                client.send(status, SURFACE_INPUT, struct.pack("=I", region))
+                client.send(region, REGION_DESTROY)
             client.commit()
             publish(client, status, solid(BLUE, STATUS_WIDTH, STATUS_HEIGHT))
             client.sync()
@@ -346,8 +350,10 @@ def main():
             check_cropped_input(path, display)
             check_stale_configures(path, display)
             check_pending_compositor_layout(path, display)
-            check_maximized_subsurfaces(path, display)
-            check_maximized_subsurfaces(path, display, fullscreen=True)
+            check_status_subsurfaces(path, display)
+            check_status_subsurfaces(path, display,
+                                     ("_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT"))
+            check_status_subsurfaces(path, display, ("_NET_WM_STATE_FULLSCREEN",))
             assert process.poll() is None
 
 

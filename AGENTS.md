@@ -184,6 +184,8 @@ automatically; a composited desktop retains the full alpha buffer and its
 shadows. ICCCM base-size hints account for the remaining margins on composited
 desktops. Maximized and fullscreen canvases follow the committed window
 geometry, keeping transient status subsurfaces from changing the window size.
+On noncomposited desktops, subsurfaces with an explicitly empty input region
+that overlap the window geometry paint without expanding the windowed canvas.
 Window geometry changes preserve the visible window's position. Geometry and
 configure acknowledgements apply with their corresponding surface commits.
 Replies to older configures preserve the WM's latest native size until the
@@ -324,8 +326,8 @@ Every check runs against the isolated module test host.
 - `native-geometry` checks that input-driven repaints keep native geometry
   stable and only changed shapes and hints emit notifications. It also checks
   cropped input coordinates, visible window placement, status subsurfaces
-  extending past maximized and fullscreen window edges, delayed configure
-  replies, and compositor changes while a resize is pending.
+  extending past windowed, maximized, and fullscreen window edges, delayed
+  configure replies, and compositor changes while a resize is pending.
 - `native-subsurfaces` checks synchronized content, nested commit dependencies,
   parent-committed position and stacking, alpha, negative coordinates, input
   regions, buffer transforms and viewports, role lifetime, destruction, and reset.
