@@ -48,7 +48,7 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
 The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
 linux-dmabuf, pointer-constraints-unstable-v1, relative-pointer-unstable-v1,
-and tearing-control-v1.
+tearing-control-v1, and xdg-system-bell-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -308,6 +308,11 @@ focus and become inert when it is removed. Each relative sample ends with
 suppresses absolute motion. Timestamps express Xorg's millisecond event
 clock in microseconds.
 
+Version 1 `xdg_system_bell_v1` rings the requesting client's XKB core
+keyboard bell using its configured volume and audible-bell setting. Requests
+can associate the XKB bell notification with a native toplevel window or ring
+without a window. Requests with surfaces that have other roles are ignored.
+
 ### Outputs
 
 Version 4 `wl_output` describes each connected, enabled RandR desktop output.
@@ -381,7 +386,6 @@ Xdnd versions 1 and 2 are not implemented.
 - Leases.
 - Text-input-v3 is deferred.
 - Server-side decoration negotiation.
-- `xdg-system-bell-v1`.
 
 ## Test inventory
 
@@ -453,6 +457,8 @@ Every check runs against the isolated module test host.
   during a lock. It also covers absolute motion,
   scroll and foreign-grab filtering, client and seat isolation, resource
   lifetime, and master-device removal.
+- `native-system-bell` checks XKB bell notifications with and without a
+  toplevel window and checks that roleless surfaces are ignored.
 - `native-cursor` reads back ARGB cursor images through XFixes.
 - `native-interactive` checks move/resize serials, all resize directions, and
   pointer-grab transfer to a test WM.
