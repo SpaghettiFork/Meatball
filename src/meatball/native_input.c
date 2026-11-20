@@ -61,6 +61,7 @@ struct InputSerial
 {
     uint32_t serial;
     uint64_t client;
+    XID action_window;
 };
 
 struct MbSeat
@@ -77,6 +78,8 @@ struct MbSeat
     XID keyboard_subscription;
     int32_t repeat_rate, repeat_delay;
     MbSurface *pointer_focus, *keyboard_focus, *grab_focus, *pointer_root;
+    MbSurface *popup_grab;
+    uint32_t popup_serial;
     uint32_t enter_serial, button_serial;
     struct InputSerial serials[INPUT_SERIAL_LIMIT];
     unsigned int serial_index;
@@ -112,7 +115,7 @@ struct InputEvent
     uint64_t target_client;
     XID target_window, native_window;
     int target_screen;
-    Bool drag_event;
+    Bool redirected_pointer;
     size_t size, charge;
     unsigned char keys[DOWN_LENGTH];
     struct Modifiers modifiers;
@@ -171,7 +174,8 @@ find_seat_id (uint64_t id)
 }
 
 static void
-record_serial (struct MbSeat *seat, MbClient *client, uint32_t serial)
+record_serial (struct MbSeat *seat, MbClient *client, uint32_t serial,
+               XID action)
 {
     unsigned int previous =
         (seat->serial_index + INPUT_SERIAL_LIMIT - 1) % INPUT_SERIAL_LIMIT;
@@ -179,8 +183,9 @@ record_serial (struct MbSeat *seat, MbClient *client, uint32_t serial)
     if (seat->serials[previous].serial == serial &&
         seat->serials[previous].client == client->lifetime)
         return;
-    seat->serials[seat->serial_index] =
-        (struct InputSerial){ serial, client->lifetime };
+    seat->serials[seat->serial_index] = (struct InputSerial){
+        .serial = serial, .client = client->lifetime, .action_window = action
+    };
     seat->serial_index = (seat->serial_index + 1) % INPUT_SERIAL_LIMIT;
 }
 
@@ -270,7 +275,7 @@ send_keyboard_enter (struct InputResource *input, uint32_t serial)
             pressed[count++] = key - XORG_KEYCODE_OFFSET;
     keys = (struct wl_array){ .size = count * sizeof (*pressed),
                               .data = pressed };
-    record_serial (seat, input->client, serial);
+    record_serial (seat, input->client, serial, None);
     wl_keyboard_send_enter (input->resource, serial,
                             seat->keyboard_focus->resource, &keys);
     wl_keyboard_send_modifiers (input->resource, serial,
@@ -500,7 +505,7 @@ get_pointer (struct wl_client *client, struct wl_resource *resource,
     }
     if (seat->pointer_focus && seat->pointer_focus->client == input->client)
     {
-        record_serial (seat, input->client, seat->enter_serial);
+        record_serial (seat, input->client, seat->enter_serial, None);
         wl_pointer_send_enter (input->resource, seat->enter_serial,
                                seat->pointer_focus->resource, seat->pointer_x,
                                seat->pointer_y);
@@ -660,7 +665,7 @@ pointer_focus (struct MbSeat *seat, MbSurface *surface, wl_fixed_t x,
         }
         if (surface && surface->client == input->client)
         {
-            record_serial (seat, input->client, serial);
+            record_serial (seat, input->client, serial, None);
             wl_pointer_send_enter (input->resource, serial, surface->resource,
                                    x, y);
             send_pointer_frame (input);
@@ -737,7 +742,7 @@ modifiers_changed (struct MbSeat *seat, struct Modifiers modifiers)
             input->client == seat->keyboard_focus->client &&
             !input->client->failed)
         {
-            record_serial (seat, input->client, serial);
+            record_serial (seat, input->client, serial, None);
             wl_keyboard_send_modifiers (input->resource, serial,
                                         modifiers.depressed, modifiers.latched,
                                         modifiers.locked, modifiers.group);
@@ -960,7 +965,8 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
     if (!event)
         return;
     memcpy (event->data, generic, size);
-    if (seat->drag_owner == client->lifetime &&
+    if ((seat->drag_owner == client->lifetime ||
+         (seat->popup_grab && seat->popup_grab->client == client)) &&
         generic->evtype >= XI_ButtonPress && generic->evtype <= XI_Motion)
     {
         DeviceIntPtr pointer;
@@ -973,7 +979,7 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
             WindowPtr native = GetSpriteWindow (pointer);
 
             event->native_window = native ? native->drawable.id : None;
-            event->drag_event = TRUE;
+            event->redirected_pointer = TRUE;
             event->target_client = root ? root->client->lifetime : 0;
             event->target_window = root ? root->window.id : None;
             event->target_screen =
@@ -1002,6 +1008,8 @@ retire_seat (struct MbSeat *seat)
     seat->button_count = 0;
     seat->capabilities = 0;
     seat->removed = TRUE;
+    if (seat->popup_grab)
+        mb_xdg_dismiss_grab (seat->popup_grab);
     mb_data_seat_removed (seat->lifetime);
     repeat_changed (seat, 0, seat->repeat_delay);
     wl_global_remove (seat->global);
@@ -1226,13 +1234,10 @@ mb_input_drag_position (MbSurface *root, int32_t x, int32_t y, uint32_t time)
     return position;
 }
 
-Bool
-mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
-                     MbDragPosition *position)
+static Bool
+grab_seat_device (ClientPtr client, DeviceIntPtr device, Window root,
+                  Bool keyboard)
 {
-    struct MbSeat *seat = find_seat_id (id);
-    DeviceIntPtr pointer;
-    GrabPtr grab;
     unsigned char events[XIMaskLen (XI_LASTEVENT)] = { 0 };
     unsigned char empty[sizeof (events)] = { 0 };
     unsigned char *masks[XIAllMasterDevices + 1] = { [XIAllDevices] = empty,
@@ -1243,11 +1248,143 @@ mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
                         .mask_size = sizeof (events) };
     GrabMask mask = { .xi2mask = &xi2mask };
     CARD8 status;
+
+    if (keyboard)
+    {
+        XISetMask (events, XI_KeyPress);
+        XISetMask (events, XI_KeyRelease);
+    }
+    else
+    {
+        XISetMask (events, XI_ButtonPress);
+        XISetMask (events, XI_ButtonRelease);
+        XISetMask (events, XI_Motion);
+    }
+    return GrabDevice (client, device, GrabModeAsync, GrabModeAsync, root,
+                       FALSE, CurrentTime, &mask, XI2, None, None,
+                       &status) == Success &&
+           status == GrabSuccess;
+}
+
+uint64_t
+mb_input_begin_popup (struct wl_resource *resource, MbSurface *popup,
+                      MbSurface *parent, Bool nested, uint32_t serial)
+{
+    uint64_t id = mb_input_seat_id (resource);
+    struct MbSeat *seat = find_seat_id (id);
+    struct InputSerial *action = NULL;
+    DeviceIntPtr pointer, keyboard;
+    ClientPtr client = popup->client->native;
+    unsigned int i;
+
+    if (!seat || seat->removed || seat->retire_pending || seat->drag_owner ||
+        (nested ? seat->popup_grab != parent : seat->popup_grab != NULL))
+        return 0;
+    for (i = 0; i < INPUT_SERIAL_LIMIT; i++)
+    {
+        struct InputSerial *entry = &seat->serials[i];
+
+        if (entry->serial == serial &&
+            entry->client == popup->client->lifetime &&
+            entry->action_window == parent->window.id)
+        {
+            action = entry;
+            break;
+        }
+    }
+    if (nested)
+    {
+        if (!action && serial != seat->popup_serial)
+            return 0;
+    }
+    else
+    {
+        Window root = popup->window.screen->root->drawable.id;
+
+        if (!action ||
+            dixLookupDevice (&pointer, seat->pointer_id, client,
+                             DixGrabAccess) != Success ||
+            dixLookupDevice (&keyboard, seat->keyboard_id, client,
+                             DixGrabAccess) != Success ||
+            !grab_seat_device (client, keyboard, root, TRUE))
+            return 0;
+        if (!grab_seat_device (client, pointer, root, FALSE))
+        {
+            keyboard->deviceGrab.DeactivateGrab (keyboard);
+            return 0;
+        }
+        seat->popup_serial = serial;
+    }
+    if (action)
+        action->action_window = None;
+    seat->popup_grab = popup;
+    return id;
+}
+
+void
+mb_input_popup_mapped (uint64_t id, MbSurface *popup)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    DeviceIntPtr keyboard;
+
+    if (seat && !seat->removed && seat->popup_grab == popup &&
+        dixLookupDevice (&keyboard, seat->keyboard_id, popup->client->native,
+                         DixGetAttrAccess) == Success &&
+        keyboard->key)
+        keyboard_focus (seat, popup, keyboard->key->down);
+}
+
+void
+mb_input_end_popup (uint64_t id, MbSurface *popup, MbSurface *parent)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    ClientPtr client = popup->client->native;
+    DeviceIntPtr pointer, keyboard;
+
+    if (!seat || seat->popup_grab != popup)
+        return;
+    seat->popup_grab = parent;
+    if (parent)
+    {
+        mb_input_popup_mapped (id, parent);
+        return;
+    }
+    seat->popup_serial = 0;
+    if (!client)
+        return;
+    if (dixLookupDevice (&pointer, seat->pointer_id, client, DixGrabAccess) ==
+            Success &&
+        pointer->deviceGrab.grab &&
+        CLIENT_ID (pointer->deviceGrab.grab->resource) == client->index)
+        pointer->deviceGrab.DeactivateGrab (pointer);
+    if (dixLookupDevice (&keyboard, seat->keyboard_id, client,
+                         DixGrabAccess) == Success)
+    {
+        MbSurface *focus = NULL;
+
+        if (keyboard->deviceGrab.grab &&
+            CLIENT_ID (keyboard->deviceGrab.grab->resource) == client->index)
+            keyboard->deviceGrab.DeactivateGrab (keyboard);
+        if (!seat->removed && keyboard->focus)
+            focus = root_for_window (keyboard->focus->win);
+        if (focus != popup)
+            keyboard_focus (seat, focus,
+                            keyboard->key ? keyboard->key->down : NULL);
+    }
+}
+
+Bool
+mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
+                     MbDragPosition *position)
+{
+    struct MbSeat *seat = find_seat_id (id);
+    DeviceIntPtr pointer;
+    GrabPtr grab;
     MbSurface *root;
 
     if (!seat || seat->removed || seat->retire_pending || seat->drag_owner ||
-        seat->grab_focus != origin || !seat->button_count ||
-        serial != seat->button_serial ||
+        seat->popup_grab || seat->grab_focus != origin ||
+        !seat->button_count || serial != seat->button_serial ||
         dixLookupDevice (&pointer, seat->pointer_id, origin->client->native,
                          DixGrabAccess) != Success)
         return FALSE;
@@ -1256,13 +1393,8 @@ mb_input_begin_drag (uint64_t id, MbSurface *origin, uint32_t serial,
         CLIENT_ID (grab->resource) != origin->client->native->index)
         return FALSE;
     seat->drag_screen = pointer->spriteInfo->sprite->hotPhys.pScreen;
-    XISetMask (events, XI_ButtonPress);
-    XISetMask (events, XI_ButtonRelease);
-    XISetMask (events, XI_Motion);
-    if (GrabDevice (origin->client->native, pointer, GrabModeAsync,
-                    GrabModeAsync, seat->drag_screen->root->drawable.id, FALSE,
-                    CurrentTime, &mask, XI2, None, None, &status) != Success ||
-        status != GrabSuccess)
+    if (!grab_seat_device (origin->client->native, pointer,
+                           seat->drag_screen->root->drawable.id, FALSE))
         return FALSE;
     if (!pointer->button || !pointer->button->buttonsDown)
     {
@@ -1410,7 +1542,10 @@ pointer_button (struct MbSeat *seat, unsigned int detail, Bool pressed,
         }
         else
         {
-            record_serial (seat, input->client, serial);
+            MbSurface *root = mb_subsurface_root (seat->pointer_focus);
+
+            record_serial (seat, input->client, serial,
+                           root ? root->window.id : None);
             wl_pointer_send_button (input->resource, serial, time, button,
                                     pressed
                                         ? WL_POINTER_BUTTON_STATE_PRESSED
@@ -1451,7 +1586,8 @@ keyboard_key (struct MbSeat *seat, const xXIDeviceEvent *event)
             input->client == seat->keyboard_focus->client &&
             !input->client->failed)
         {
-            record_serial (seat, input->client, serial);
+            record_serial (seat, input->client, serial,
+                           pressed ? seat->keyboard_focus->window.id : None);
             wl_keyboard_send_key (input->resource, serial, event->time,
                                   key - XORG_KEYCODE_OFFSET,
                                   pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
@@ -1466,6 +1602,9 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
     const xXIGenericDeviceEvent *generic = (const void *)queued->data;
     MbSurface *root;
 
+    if (seat->popup_grab && generic->evtype >= XI_Enter &&
+        generic->evtype <= XI_FocusOut)
+        return;
     if (generic->evtype >= XI_Enter && generic->evtype <= XI_FocusOut)
     {
         const xXIEnterEvent *event = (const void *)generic;
@@ -1523,7 +1662,8 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
             MbDragPosition position;
             unsigned int detail = event->detail;
 
-            if (!queued->drag_event || queued->client != seat->drag_owner)
+            if (!queued->redirected_pointer ||
+                queued->client != seat->drag_owner)
                 return;
             root =
                 window_surface (queued->target_client, queued->target_window);
@@ -1556,6 +1696,55 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
                 if (!seat->button_count)
                     mb_data_drag_drop (seat->lifetime);
             }
+            return;
+        }
+        if (seat->popup_grab)
+        {
+            WindowPtr window;
+
+            if (queued->client != seat->popup_grab->client->lifetime)
+                return;
+            if (event->evtype == XI_KeyPress || event->evtype == XI_KeyRelease)
+            {
+                if (event->evtype == XI_KeyPress &&
+                    event->detail == KEY_ESC + XORG_KEYCODE_OFFSET)
+                    mb_xdg_dismiss_grab (seat->popup_grab);
+                else
+                    keyboard_key (seat, event);
+                return;
+            }
+            if (!queued->redirected_pointer)
+                return;
+            root =
+                window_surface (queued->target_client, queued->target_window);
+            if (root && root->client != seat->popup_grab->client)
+                root = NULL;
+            if (!root && event->evtype == XI_ButtonPress &&
+                (event->detail < X11_SCROLL_UP ||
+                 event->detail > X11_SCROLL_RIGHT))
+            {
+                mb_xdg_dismiss_grab (seat->popup_grab);
+                return;
+            }
+            if (seat->button_count && seat->grab_focus)
+                root = mb_subsurface_root (seat->grab_focus);
+            window =
+                root ? mb_window_get (&root->window, DixGetAttrAccess) : NULL;
+            seat->pointer_root = window && window->realized ? root : NULL;
+            seat->root_pointer_x = (double)event->root_x / FIXED_16_ONE;
+            seat->root_pointer_y = (double)event->root_y / FIXED_16_ONE;
+            pointer_motion (seat, seat->pointer_root,
+                            window ? seat->root_pointer_x -
+                                         window->drawable.x + root->scene_x
+                                   : 0,
+                            window ? seat->root_pointer_y -
+                                         window->drawable.y + root->scene_y
+                                   : 0,
+                            event->time, event->evtype == XI_Motion);
+            if (event->evtype == XI_ButtonPress ||
+                event->evtype == XI_ButtonRelease)
+                pointer_button (seat, event->detail,
+                                event->evtype == XI_ButtonPress, event->time);
             return;
         }
         root = window_surface (queued->client, event->event);

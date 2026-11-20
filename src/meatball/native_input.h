@@ -8,6 +8,12 @@
 struct MbInput;
 extern Bool mb_input_begin_drag (uint64_t seat, MbSurface *origin,
                                  uint32_t serial, MbDragPosition *position);
+extern uint64_t mb_input_begin_popup (struct wl_resource *seat,
+                                      MbSurface *popup, MbSurface *parent,
+                                      Bool nested, uint32_t serial);
+extern void mb_input_popup_mapped (uint64_t seat, MbSurface *popup);
+extern void mb_input_end_popup (uint64_t seat, MbSurface *popup,
+                                MbSurface *parent);
 extern uint64_t mb_input_drag_seat (ClientPtr client);
 extern MbDragPosition mb_input_drag_position (MbSurface *root, int32_t x,
                                               int32_t y, uint32_t time);

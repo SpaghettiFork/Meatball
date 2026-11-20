@@ -18,6 +18,7 @@ extern Bool mb_xdg_map (MbSurface *surface);
 extern Bool mb_xdg_resize_pending (MbSurface *surface);
 extern Bool mb_xdg_surface_destroy_request (MbSurface *surface);
 extern void mb_xdg_surface_destroyed (MbSurface *surface);
+extern void mb_xdg_dismiss_grab (MbSurface *popup);
 extern void mb_xdg_event (MbSurface *surface, const xEvent *event);
 
 #endif
