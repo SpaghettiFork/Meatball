@@ -43,8 +43,8 @@ build_version.h.in        revision stamp template
 wayland-proto/            protocol XML, scanned by wayland-scanner
 ```
 
-`src/meatball/wayland-proto/` holds the upstream protocol definitions. Only
-`xdg-shell.xml` and `viewporter.xml` are scanned into the build today.
+`src/meatball/wayland-proto/` holds the upstream protocol definitions.
+The build scans xdg-shell, viewporter, and primary-selection-unstable-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -264,6 +264,13 @@ owner disconnects, and resets clean up pending conversions. Selection ownership
 and transfer windows are unmapped InputOnly windows. X11 `MULTIPLE` conversions
 and legacy `STRING` export are not implemented yet.
 
+`zwp_primary_selection_device_manager_v1` supports primary selection between
+Wayland clients and bridges it to X11 `PRIMARY` in both directions. Primary
+selection has independent ownership and serial tracking on each seat.
+Only the keyboard-focused client receives a live offer. On focus loss it
+receives a null selection and its previous offer becomes inactive. X11
+`PRIMARY` reuses clipboard format negotiation and asynchronous INCR transfers.
+
 Xdnd versions 3 through 5 bridge pointer drags in both directions. Mapped xdg
 toplevels advertise `XdndAware`. Outgoing drags discover aware ancestors and
 validated proxy windows, publish type and action lists, and coalesce pointer
@@ -280,7 +287,6 @@ Xdnd versions 1 and 2 are not implemented.
 
 ## Still to port
 
-- Primary selection.
 - Present.
 - DRI3 buffers.
 - Popups.
@@ -352,6 +358,8 @@ Every check runs against the isolated module test host.
   negotiation, timestamps, unsupported targets, small and large transfers in
   both directions, INCR backpressure, omitted size hints, large property chunks,
   blocked readers, Latin-1 imports, ownership replacement, owner disconnects, and resets.
+  It also checks Wayland primary selection, both X11 `PRIMARY` transfer
+  directions, focus loss, serial ownership, and clipboard isolation.
 - `native-xdnd` checks both drag directions for versions 3 through 5, type
   lists, validated proxies, copy/move/ask actions, final ask actions, selection
   transfers before and after drop, coalesced motion, drops awaiting status,

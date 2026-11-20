@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "primary-selection.h"
 #include "server.h"
 
 #include <X11/extensions/shapeconst.h>
@@ -43,18 +44,24 @@ struct MbDataSource
     size_t mime_count, mime_bytes;
     enum SourceUse use;
     uint32_t actions;
-    Bool actions_set, cancelled;
+    Bool actions_set, cancelled, primary;
     const MbDataSourceOps *ops;
     void *data;
+};
+
+struct SeatSelection
+{
+    MbDataSource *source;
+    uint32_t serial;
+    Bool serial_set;
 };
 
 struct DataSeat
 {
     struct wl_list link;
     uint64_t id, focus;
-    Bool removed, serial_set;
-    uint32_t selection_serial;
-    struct MbDataSource *selection;
+    Bool removed;
+    struct SeatSelection selections[MB_SELECTION_COUNT];
     struct DataDrag *drag;
 };
 
@@ -64,6 +71,7 @@ struct DataDevice
     struct wl_resource *resource;
     struct DataSeat *seat;
     MbClient *client;
+    MbSelectionKind kind;
 };
 
 struct DataOffer
@@ -72,6 +80,7 @@ struct DataOffer
     struct wl_resource *resource;
     struct MbDataSource *source;
     uint64_t seat;
+    MbSelectionKind kind;
     Bool active, drag_offer, finished;
     struct DataDrag *drag;
     struct DragTarget *target;
@@ -106,9 +115,9 @@ struct DataDrag
 
 struct MbData
 {
-    struct wl_global *global;
+    struct wl_global *globals[MB_SELECTION_COUNT];
     struct wl_list seats, devices, sources, offers, drags;
-    MbDataSource *imported;
+    MbDataSource *imported[MB_SELECTION_COUNT];
     const MbDataBridge *bridge;
     void *bridge_data;
 };
@@ -172,7 +181,10 @@ source_notify (MbDataSource *source, MbSourceEvent event, const char *mime,
             wl_data_source_send_dnd_finished (source->resource);
         break;
     case MB_SOURCE_CANCELLED:
-        wl_data_source_send_cancelled (source->resource);
+        if (source->primary)
+            zwp_primary_selection_source_v1_send_cancelled (source->resource);
+        else
+            wl_data_source_send_cancelled (source->resource);
         break;
     case MB_SOURCE_DESTROYED:
         break;
@@ -194,7 +206,11 @@ mb_data_source_send (MbDataSource *source, const char *mime, int fd)
     }
     if (source->resource)
     {
-        wl_data_source_send_send (source->resource, mime, fd);
+        if (source->primary)
+            zwp_primary_selection_source_v1_send_send (source->resource, mime,
+                                                       fd);
+        else
+            wl_data_source_send_send (source->resource, mime, fd);
         close (fd);
         return TRUE;
     }
@@ -216,26 +232,27 @@ mb_data_source_actions (MbDataSource *source)
 }
 
 static void
-invalidate_selection (struct DataSeat *seat)
+invalidate_selection (struct DataSeat *seat, MbSelectionKind kind)
 {
     struct DataOffer *offer;
 
     wl_list_for_each (offer, &compositor.data->offers, link)
     {
-        if (offer->seat == seat->id && !offer->drag_offer)
+        if (offer->seat == seat->id && offer->kind == kind &&
+            !offer->drag_offer)
             offer->active = FALSE;
     }
 }
 
 static void
-announce_selection (struct DataSeat *seat)
+announce_selection (struct DataSeat *seat, MbSelectionKind kind)
 {
     struct DataDevice *device;
 
     wl_list_for_each (device, &compositor.data->devices, link)
     {
-        if (device->seat == seat && !device->client->failed &&
-            device->client->lifetime == seat->focus)
+        if (device->seat == seat && device->kind == kind &&
+            !device->client->failed && device->client->lifetime == seat->focus)
             send_selection (device);
     }
 }
@@ -256,8 +273,9 @@ mb_data_source_destroy (MbDataSource *source)
     if (compositor.data->bridge)
         compositor.data->bridge->destroyed (compositor.data->bridge_data,
                                             source);
-    if (compositor.data->imported == source)
-        compositor.data->imported = NULL;
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+        if (compositor.data->imported[kind] == source)
+            compositor.data->imported[kind] = NULL;
     wl_list_for_each_safe (drag, next_drag, &compositor.data->drags, link)
     {
         if (drag->source == source)
@@ -273,11 +291,13 @@ mb_data_source_destroy (MbDataSource *source)
     }
     wl_list_for_each (seat, &compositor.data->seats, link)
     {
-        if (seat->selection == source)
+        for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
         {
-            seat->selection = NULL;
-            invalidate_selection (seat);
-            announce_selection (seat);
+            if (seat->selections[kind].source != source)
+                continue;
+            seat->selections[kind].source = NULL;
+            invalidate_selection (seat, kind);
+            announce_selection (seat, kind);
         }
     }
     source_notify (source, MB_SOURCE_DESTROYED, NULL, 0);
@@ -350,26 +370,28 @@ mb_data_set_bridge (const MbDataBridge *bridge, void *data)
 }
 
 void
-mb_data_import_selection (MbDataSource *source)
+mb_data_import_selection (MbSelectionKind kind, MbDataSource *source)
 {
     struct DataSeat *seat;
-    MbDataSource *previous = compositor.data->imported;
+    MbDataSource *previous = compositor.data->imported[kind];
 
-    compositor.data->imported = source;
+    compositor.data->imported[kind] = source;
     if (source)
         source->use = SOURCE_SELECTION;
     wl_list_for_each (seat, &compositor.data->seats, link)
     {
         if (seat->removed)
             continue;
-        if (seat->selection && seat->selection != source)
+        if (seat->selections[kind].source &&
+            seat->selections[kind].source != source)
         {
-            seat->selection->cancelled = TRUE;
-            source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
+            seat->selections[kind].source->cancelled = TRUE;
+            source_notify (seat->selections[kind].source, MB_SOURCE_CANCELLED,
+                           NULL, 0);
         }
-        invalidate_selection (seat);
-        seat->selection = source;
-        announce_selection (seat);
+        invalidate_selection (seat, kind);
+        seat->selections[kind].source = source;
+        announce_selection (seat, kind);
     }
     if (previous && previous != source)
         mb_data_source_destroy (previous);
@@ -385,8 +407,10 @@ source_offer (struct wl_client *client, struct wl_resource *resource,
 
     if (source->use != SOURCE_UNUSED)
     {
-        wl_resource_post_error (resource, WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
-                                "data source has already been used");
+        if (!source->primary)
+            wl_resource_post_error (resource,
+                                    WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
+                                    "data source has already been used");
         return;
     }
     if (find_mime (source, mime))
@@ -446,6 +470,12 @@ static const struct wl_data_source_interface source_implementation = {
     .set_actions = source_actions,
 };
 
+static const struct zwp_primary_selection_source_v1_interface
+    primary_source = {
+        .offer = source_offer,
+        .destroy = release,
+    };
+
 static void
 create_source (struct wl_client *client, struct wl_resource *resource,
                uint32_t id)
@@ -454,16 +484,22 @@ create_source (struct wl_client *client, struct wl_resource *resource,
 
     if (!source)
         goto fail;
-    source->resource =
-        wl_resource_create (client, &wl_data_source_interface,
-                            wl_resource_get_version (resource), id);
+    source->primary = wl_resource_get_user_data (resource) != NULL;
+    source->resource = wl_resource_create (
+        client,
+        source->primary ? &zwp_primary_selection_source_v1_interface
+                        : &wl_data_source_interface,
+        wl_resource_get_version (resource), id);
     if (!source->resource)
     {
         free (source);
         goto fail;
     }
     wl_list_insert (compositor.data->sources.prev, &source->link);
-    wl_resource_set_implementation (source->resource, &source_implementation,
+    wl_resource_set_implementation (source->resource,
+                                    source->primary
+                                        ? (const void *)&primary_source
+                                        : &source_implementation,
                                     source, source_destroyed);
     return;
 
@@ -601,17 +637,25 @@ static const struct wl_data_offer_interface offer_implementation = {
     .set_actions = offer_actions,
 };
 
+static const struct zwp_primary_selection_offer_v1_interface primary_offer = {
+    .receive = offer_receive,
+    .destroy = release,
+};
+
 static struct DataOffer *
 create_offer (struct DataDevice *device, struct MbDataSource *source,
               struct DataDrag *drag)
 {
     struct DataOffer *offer = calloc (1, sizeof (*offer));
     size_t i;
+    Bool primary = device->kind == MB_SELECTION_PRIMARY;
 
     if (!offer)
         goto fail;
     offer->resource =
-        wl_resource_create (device->client->wayland, &wl_data_offer_interface,
+        wl_resource_create (device->client->wayland,
+                            primary ? &zwp_primary_selection_offer_v1_interface
+                                    : &wl_data_offer_interface,
                             wl_resource_get_version (device->resource), 0);
     if (!offer->resource)
     {
@@ -620,6 +664,7 @@ create_offer (struct DataDevice *device, struct MbDataSource *source,
     }
     offer->source = source;
     offer->seat = device->seat->id;
+    offer->kind = device->kind;
     offer->active = TRUE;
     offer->drag = drag;
     offer->drag_offer = drag != NULL;
@@ -627,6 +672,17 @@ create_offer (struct DataDevice *device, struct MbDataSource *source,
                     WL_DATA_OFFER_SET_ACTIONS_SINCE_VERSION)
         offer->actions = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY;
     wl_list_insert (compositor.data->offers.prev, &offer->link);
+    if (primary)
+    {
+        wl_resource_set_implementation (offer->resource, &primary_offer, offer,
+                                        offer_destroyed);
+        zwp_primary_selection_device_v1_send_data_offer (device->resource,
+                                                         offer->resource);
+        for (i = 0; i < source->mime_count; i++)
+            zwp_primary_selection_offer_v1_send_offer (offer->resource,
+                                                       source->mimes[i]);
+        return offer;
+    }
     wl_resource_set_implementation (offer->resource, &offer_implementation,
                                     offer, offer_destroyed);
     wl_data_device_send_data_offer (device->resource, offer->resource);
@@ -645,17 +701,21 @@ fail:
 static void
 send_selection (struct DataDevice *device)
 {
-    struct MbDataSource *source = device->seat->selection;
-    struct DataOffer *offer;
+    MbDataSource *source = device->seat->selections[device->kind].source;
+    struct DataOffer *offer = NULL;
 
-    if (!source || device->seat->removed)
+    if (source && !device->seat->removed)
     {
-        wl_data_device_send_selection (device->resource, NULL);
-        return;
+        offer = create_offer (device, source, NULL);
+        if (!offer)
+            return;
     }
-    offer = create_offer (device, source, NULL);
-    if (offer)
-        wl_data_device_send_selection (device->resource, offer->resource);
+    if (device->kind == MB_SELECTION_PRIMARY)
+        zwp_primary_selection_device_v1_send_selection (
+            device->resource, offer ? offer->resource : NULL);
+    else
+        wl_data_device_send_selection (device->resource,
+                                       offer ? offer->resource : NULL);
 }
 
 static void
@@ -664,18 +724,20 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
 {
     struct DataDevice *device = wl_resource_get_user_data (resource);
     struct DataSeat *seat = device->seat;
+    struct SeatSelection *selection = &seat->selections[device->kind];
     struct MbDataSource *source =
         source_resource ? wl_resource_get_user_data (source_resource) : NULL;
 
     if (seat->removed ||
         !mb_input_selection_serial (seat->id, device->client, serial) ||
-        (seat->serial_set &&
-         (uint32_t)(serial - seat->selection_serial) > INT32_MAX))
+        (selection->serial_set &&
+         (uint32_t)(serial - selection->serial) > INT32_MAX))
         return;
     if (source && source->use != SOURCE_UNUSED)
     {
-        wl_resource_post_error (resource, DATA_DEVICE_USED_SOURCE,
-                                "data source has already been used");
+        if (device->kind == MB_SELECTION_CLIPBOARD)
+            wl_resource_post_error (resource, DATA_DEVICE_USED_SOURCE,
+                                    "data source has already been used");
         return;
     }
     if (source && source->actions_set)
@@ -685,21 +747,21 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
                                 "drag source cannot own the selection");
         return;
     }
-    if (seat->selection)
+    if (selection->source)
     {
-        seat->selection->cancelled = TRUE;
-        source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
+        selection->source->cancelled = TRUE;
+        source_notify (selection->source, MB_SOURCE_CANCELLED, NULL, 0);
     }
-    invalidate_selection (seat);
-    seat->selection = source;
-    seat->selection_serial = serial;
-    seat->serial_set = TRUE;
+    invalidate_selection (seat, device->kind);
+    selection->source = source;
+    selection->serial = serial;
+    selection->serial_set = TRUE;
     if (source)
         source->use = SOURCE_SELECTION;
-    announce_selection (seat);
+    announce_selection (seat, device->kind);
     if (compositor.data->bridge)
         compositor.data->bridge->selection (compositor.data->bridge_data,
-                                            seat->id, source);
+                                            device->kind, seat->id, source);
 }
 
 static void
@@ -978,7 +1040,8 @@ mb_data_drag_motion (uint64_t id, const MbDragPosition *position)
         drag->enter_serial = wl_display_next_serial (compositor.wl_display);
         wl_list_for_each (device, &compositor.data->devices, link)
         {
-            if (device->seat != drag->seat ||
+            if (device->kind != MB_SELECTION_CLIPBOARD ||
+                device->seat != drag->seat ||
                 device->client != surface->client || device->client->failed)
                 continue;
             target = calloc (1, sizeof (*target));
@@ -1365,11 +1428,18 @@ static const struct wl_data_device_interface device_implementation = {
     .release = release,
 };
 
+static const struct zwp_primary_selection_device_v1_interface
+    primary_device = {
+        .set_selection = set_selection,
+        .destroy = release,
+    };
+
 static void
 get_device (struct wl_client *client, struct wl_resource *resource,
             uint32_t id, struct wl_resource *seat_resource)
 {
     uint64_t seat_id = mb_input_seat_id (seat_resource);
+    Bool primary = wl_resource_get_user_data (resource) != NULL;
     struct DataSeat *seat;
     struct DataDevice *device;
 
@@ -1393,24 +1463,30 @@ get_device (struct wl_client *client, struct wl_resource *resource,
             goto fail;
         seat->id = seat_id;
         seat->focus = focus ? focus->lifetime : 0;
-        seat->selection = compositor.data->imported;
+        for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+            seat->selections[kind].source = compositor.data->imported[kind];
         wl_list_insert (compositor.data->seats.prev, &seat->link);
     }
     device = calloc (1, sizeof (*device));
     if (!device)
         goto fail;
-    device->resource =
-        wl_resource_create (client, &wl_data_device_interface,
-                            wl_resource_get_version (resource), id);
+    device->resource = wl_resource_create (
+        client,
+        primary ? &zwp_primary_selection_device_v1_interface
+                : &wl_data_device_interface,
+        wl_resource_get_version (resource), id);
     if (!device->resource)
     {
         free (device);
         goto fail;
     }
     device->seat = seat;
+    device->kind = primary ? MB_SELECTION_PRIMARY : MB_SELECTION_CLIPBOARD;
     device->client = mb_client_for_wayland (client);
     wl_list_insert (compositor.data->devices.prev, &device->link);
-    wl_resource_set_implementation (device->resource, &device_implementation,
+    wl_resource_set_implementation (device->resource,
+                                    primary ? (const void *)&primary_device
+                                            : &device_implementation,
                                     device, device_destroyed);
     if (seat->focus == device->client->lifetime && !seat->removed)
         send_selection (device);
@@ -1428,19 +1504,31 @@ static const struct wl_data_device_manager_interface implementation = {
 #endif
 };
 
+static const struct zwp_primary_selection_device_manager_v1_interface
+    primary_manager = {
+        .create_source = create_source,
+        .get_device = get_device,
+        .destroy = release,
+    };
+
 static void
 bind_manager (struct wl_client *client, void *data, uint32_t version,
               uint32_t id)
 {
-    struct wl_resource *resource = wl_resource_create (
-        client, &wl_data_device_manager_interface, version, id);
+    const struct wl_interface *interface =
+        data ? &zwp_primary_selection_device_manager_v1_interface
+             : &wl_data_device_manager_interface;
+    struct wl_resource *resource =
+        wl_resource_create (client, interface, version, id);
 
     if (!resource)
     {
         wl_client_post_no_memory (client);
         return;
     }
-    wl_resource_set_implementation (resource, &implementation, NULL, NULL);
+    wl_resource_set_implementation (
+        resource, data ? (const void *)&primary_manager : &implementation,
+        data, NULL);
 }
 
 void
@@ -1455,9 +1543,22 @@ mb_data_keyboard_focus (uint64_t id, MbClient *client)
     {
         if (seat->id != id || seat->removed || seat->focus == focus)
             continue;
-        invalidate_selection (seat);
+        struct DataDevice *device;
+
+        wl_list_for_each (device, &compositor.data->devices, link)
+        {
+            if (device->seat == seat && device->kind == MB_SELECTION_PRIMARY &&
+                device->client->lifetime == seat->focus &&
+                !device->client->failed)
+                zwp_primary_selection_device_v1_send_selection (
+                    device->resource, NULL);
+        }
         seat->focus = focus;
-        announce_selection (seat);
+        for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+        {
+            invalidate_selection (seat, kind);
+            announce_selection (seat, kind);
+        }
     }
 }
 
@@ -1478,18 +1579,23 @@ mb_data_seat_removed (uint64_t id)
     {
         if (seat->id != id)
             continue;
-        if (seat->selection)
+        for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
         {
-            seat->selection->cancelled = TRUE;
-            source_notify (seat->selection, MB_SOURCE_CANCELLED, NULL, 0);
-            seat->selection = NULL;
+            MbDataSource *source = seat->selections[kind].source;
+
+            if (source && source != compositor.data->imported[kind])
+            {
+                source->cancelled = TRUE;
+                source_notify (source, MB_SOURCE_CANCELLED, NULL, 0);
+            }
+            seat->selections[kind].source = NULL;
+            invalidate_selection (seat, kind);
         }
         if (compositor.data->bridge && compositor.data->bridge->removed)
             compositor.data->bridge->removed (compositor.data->bridge_data,
                                               seat->id);
         seat->focus = 0;
         seat->removed = TRUE;
-        invalidate_selection (seat);
     }
 }
 
@@ -1506,10 +1612,16 @@ mb_data_initialize (void)
     wl_list_init (&data->offers);
     wl_list_init (&data->drags);
     compositor.data = data;
-    data->global = wl_global_create (compositor.wl_display,
-                                     &wl_data_device_manager_interface,
-                                     DATA_VERSION, NULL, bind_manager);
-    if (!data->global)
+    data->globals[MB_SELECTION_CLIPBOARD] = wl_global_create (
+        compositor.wl_display, &wl_data_device_manager_interface, DATA_VERSION,
+        NULL, bind_manager);
+    data->globals[MB_SELECTION_PRIMARY] = wl_global_create (
+        compositor.wl_display,
+        &zwp_primary_selection_device_manager_v1_interface,
+        zwp_primary_selection_device_manager_v1_interface.version, data,
+        bind_manager);
+    if (!data->globals[MB_SELECTION_CLIPBOARD] ||
+        !data->globals[MB_SELECTION_PRIMARY])
     {
         mb_data_shutdown ();
         return FALSE;
@@ -1529,8 +1641,9 @@ mb_data_shutdown (void)
 
     if (!data)
         return;
-    if (data->global)
-        wl_global_destroy (data->global);
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+        if (data->globals[kind])
+            wl_global_destroy (data->globals[kind]);
     wl_list_for_each_safe (drag, next_drag, &data->drags, link)
     {
         end_drag (drag, FALSE);

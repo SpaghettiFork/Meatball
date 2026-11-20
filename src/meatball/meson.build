@@ -20,6 +20,14 @@ viewport_code = custom_target('native-viewport-code',
                               input: 'wayland-proto/viewporter.xml', output: 'viewporter.c',
                               command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+primary_xml = 'wayland-proto/primary-selection-unstable-v1.xml'
+primary_header = custom_target('native-primary-header',
+                               input: primary_xml, output: 'primary-selection.h',
+                               command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+primary_code = custom_target('native-primary-code',
+                             input: primary_xml, output: 'primary-selection.c',
+                             command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -44,6 +52,8 @@ srcs_meatball = [
     xdg_code,
     viewport_header,
     viewport_code,
+    primary_header,
+    primary_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

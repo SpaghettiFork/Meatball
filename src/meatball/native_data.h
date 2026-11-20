@@ -26,9 +26,17 @@ typedef struct
                     uint32_t action);
 } MbDataSourceOps;
 
+typedef enum
+{
+    MB_SELECTION_CLIPBOARD,
+    MB_SELECTION_PRIMARY,
+    MB_SELECTION_COUNT,
+} MbSelectionKind;
+
 typedef struct
 {
-    void (*selection) (void *data, uint64_t seat, MbDataSource *source);
+    void (*selection) (void *data, MbSelectionKind kind, uint64_t seat,
+                       MbDataSource *source);
     void (*removed) (void *data, uint64_t seat);
     void (*destroyed) (void *data, MbDataSource *source);
 } MbDataBridge;
@@ -44,7 +52,8 @@ extern Bool mb_data_source_send (MbDataSource *source, const char *mime,
 extern const char *const *mb_data_source_mimes (MbDataSource *source,
                                                 size_t *count);
 extern uint32_t mb_data_source_actions (MbDataSource *source);
-extern void mb_data_import_selection (MbDataSource *source);
+extern void mb_data_import_selection (MbSelectionKind kind,
+                                      MbDataSource *source);
 extern void mb_data_set_bridge (const MbDataBridge *bridge, void *data);
 typedef struct
 {
