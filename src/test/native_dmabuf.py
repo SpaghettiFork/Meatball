@@ -174,11 +174,12 @@ def check_import(path, display, fd, version):
         client.attach(buffer)
         client.commit()
         buffer_release(client, buffer)
+        # Reuse is allowed at release, including before the frame callback.
+        changed = COLORS[::-1]
+        os.pwrite(fd, struct.pack(f"={len(changed)}I", *changed), OFFSET)
         client.frame_done(frame)
         wait_pixels(observer, window, COLORS)
 
-        changed = COLORS[::-1]
-        os.pwrite(fd, struct.pack(f"={len(changed)}I", *changed), OFFSET)
         # The released client's pixels can change without changing the scene.
         frame = client.frame()
         client.commit()
