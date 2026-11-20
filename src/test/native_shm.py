@@ -31,6 +31,13 @@ COLORS = (0x80402010, 0x00000000, 0xff654321, 0xfffedcba)
 RGB_MASK = 0xffffff
 SHM_ARGB8888 = 0
 SHM_XRGB8888 = 1
+SHM_RGB565 = int.from_bytes(b"RG16", "little")
+SHM_XRGB1555 = int.from_bytes(b"XR15", "little")
+RGB565_PIXELS = (0xf800, 0x07e0, 0x001f, 0xffff)
+XRGB1555_PIXELS = (0x7c00, 0x03e0, 0x001f, 0x7fff)
+RGB16_EXPECTED = (0xff0000, 0x00ff00, 0x0000ff, 0xffffff)
+PACKED_16_WIDTH = 3
+RGB16_BYTES = 2
 SHM_INVALID_FORMAT = 0
 SHM_INVALID_STRIDE = 1
 SHM_INVALID_FD = 2
@@ -67,7 +74,8 @@ def wait_pixels(x11, window, expected_colors=COLORS, mask=RGB_MASK):
         time.sleep(POLL_INTERVAL)
 
 
-def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, fault=False):
+def check_buffer(x11, root, path, stride, format, destroy_before_commit=False,
+                 fault=False, width=WIDTH, offset=BUFFER_OFFSET):
     client = Wayland(path)
     fd = os.memfd_create("meatball-shm-test", os.MFD_CLOEXEC)
     try:
@@ -75,17 +83,21 @@ def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, f
         shm = client.bind("wl_shm")
         formats = {struct.unpack("=I", data)[0] for object_id, opcode, data in client.roundtrip_events()
                    if object_id == shm and opcode == 0}
-        assert formats == {SHM_ARGB8888, SHM_XRGB8888}
+        assert formats == {SHM_ARGB8888, SHM_XRGB8888, SHM_RGB565, SHM_XRGB1555}
+        raw16 = {SHM_RGB565: RGB565_PIXELS, SHM_XRGB1555: XRGB1555_PIXELS}.get(format)
+        expected = (0,) * len(COLORS) if fault else RGB16_EXPECTED if raw16 else COLORS
         before = query_tree(x11, root)
         surface = create_surface(client, compositor)
         window, = query_tree(x11, root) - before
-        size = BUFFER_OFFSET + stride * HEIGHT
+        size = offset + stride * HEIGHT
         os.ftruncate(fd, size)
+        raw = raw16 or COLORS
         for row in range(HEIGHT):
-            os.pwrite(fd, struct.pack("=II", *COLORS[row * WIDTH:(row + 1) * WIDTH]),
-                      BUFFER_OFFSET + row * stride)
+            pixels = raw[row * WIDTH:(row + 1) * WIDTH] + (0,) * (width - WIDTH)
+            os.pwrite(fd, struct.pack(f"={width}{'H' if raw16 else 'I'}", *pixels),
+                      offset + row * stride)
         pool = create_pool(client, shm, fd, size)
-        buffer = create_buffer(client, pool, BUFFER_OFFSET, WIDTH, HEIGHT, stride, format)
+        buffer = create_buffer(client, pool, offset, width, HEIGHT, stride, format)
         client.send(pool, POOL_DESTROY)
         client.send(surface, WL_SURFACE_ATTACH, struct.pack("=Iii", buffer, 0, 0))
         if destroy_before_commit:
@@ -98,7 +110,7 @@ def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, f
             client.send(buffer, BUFFER_DESTROY)
         client.sync()
         x11.sendall(struct.pack("<BBHI", MAP_WINDOW, 0, 2, window))
-        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS,
+        wait_pixels(x11, window, expected,
                     0xffffffff if format == SHM_ARGB8888 else RGB_MASK)
         callback = client.allocate_id()
         client.send(surface, WL_SURFACE_FRAME, struct.pack("=I", callback))
@@ -110,7 +122,7 @@ def check_buffer(x11, root, path, stride, format, destroy_before_commit=False, f
                 break
         x11.sendall(struct.pack("<BBHIhhHH", CLEAR_AREA, 1, 4, window,
                                 0, 0, WIDTH, HEIGHT))
-        wait_pixels(x11, window, (0,) * len(COLORS) if fault else COLORS,
+        wait_pixels(x11, window, expected,
                     0xffffffff if format == SHM_ARGB8888 else RGB_MASK)
         callback = client.allocate_id()
         client.send(surface, WL_SURFACE_FRAME, struct.pack("=I", callback))
@@ -199,7 +211,8 @@ def main():
     host, module = sys.argv[1:3]
     with tempfile.TemporaryDirectory(prefix="meatball-shm-") as directory:
         path = Path(directory) / "wayland"
-        with server(host, module, {"MEATBALL_TEST_SOCKET": str(path)}) as (process, display):
+        with server(host, module, {"MEATBALL_TEST_SOCKET": str(path)},
+                    arguments=["-pixdepths", "15", "16"]) as (process, display):
             x11, setup = connect_x11(display, return_setup=True)
             try:
                 wait_socket(path, process)
@@ -213,6 +226,9 @@ def main():
                 for format in [SHM_ARGB8888, SHM_XRGB8888]:
                     check_buffer(x11, root, path, NORMAL_STRIDE, format)
                 check_buffer(x11, root, path, LARGE_STRIDE, SHM_XRGB8888, True)
+                check_buffer(x11, root, path, WIDTH * RGB16_BYTES, SHM_RGB565)
+                check_buffer(x11, root, path, PACKED_16_WIDTH * RGB16_BYTES,
+                             SHM_XRGB1555, width=PACKED_16_WIDTH, offset=RGB16_BYTES)
                 check_pool_resize(path)
                 check_invalid(path)
             finally:

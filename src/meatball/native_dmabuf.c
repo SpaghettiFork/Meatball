@@ -18,19 +18,20 @@
 #define DMABUF_VERSION ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION
 #define DMABUF_MAX_PLANES 4
 #define MODIFIER_HALF_BITS 32
-#define DMABUF_BPP 32
-#define DMABUF_BYTES_PER_PIXEL (DMABUF_BPP / CHAR_BIT)
 
 typedef struct
 {
     uint32_t fourcc;
-    unsigned int depth;
+    unsigned int depth, bpp;
     CARD32 render_format;
 } Format;
 
 static const Format formats[] = {
-    { DRM_FORMAT_XRGB8888, MB_SHM_XRGB_DEPTH, PICT_x8r8g8b8 },
-    { DRM_FORMAT_ARGB8888, MB_SHM_ARGB_DEPTH, PICT_a8r8g8b8 },
+    { DRM_FORMAT_XRGB8888, MB_SHM_XRGB_DEPTH, MB_SHM_BITS_PER_PIXEL,
+      PICT_x8r8g8b8 },
+    { DRM_FORMAT_ARGB8888, MB_SHM_ARGB_DEPTH, MB_SHM_BITS_PER_PIXEL,
+      PICT_a8r8g8b8 },
+    { DRM_FORMAT_RGB565, MB_RGB565_DEPTH, MB_RGB16_BPP, PICT_r5g6b5 },
 };
 
 typedef struct
@@ -176,7 +177,7 @@ create_buffer (struct wl_client *client, struct wl_resource *resource,
     params->used = TRUE;
     if (width <= 0 || height <= 0 || width > MB_MAX_DIMENSION ||
         height > MB_MAX_DIMENSION ||
-        (int64_t)width * height * DMABUF_BYTES_PER_PIXEL >
+        (int64_t)width * height * MB_SHM_BYTES_PER_PIXEL >
             MB_MAX_SNAPSHOT_BYTES)
     {
         error = ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS;
@@ -224,7 +225,7 @@ create_buffer (struct wl_client *client, struct wl_resource *resource,
         if (length >= 0)
             lseek (params->fds[i], 0, SEEK_SET);
         if ((linear || implicit) &&
-            stride < (uint64_t)width * DMABUF_BYTES_PER_PIXEL)
+            stride < (uint64_t)width * (format->bpp / CHAR_BIT))
             goto bounds;
         if (implicit && offset)
             goto failed;
@@ -236,13 +237,13 @@ create_buffer (struct wl_client *client, struct wl_resource *resource,
     }
     if (dri3_pixmap_from_fds (&pixmap, dmabuf->screen, count, params->fds,
                               width, height, params->strides, params->offsets,
-                              format->depth, DMABUF_BPP,
+                              format->depth, format->bpp,
                               params->modifier) != Success ||
         !pixmap)
         goto failed;
     if (pixmap->drawable.width != width || pixmap->drawable.height != height ||
         pixmap->drawable.depth != format->depth ||
-        pixmap->drawable.bitsPerPixel != DMABUF_BPP)
+        pixmap->drawable.bitsPerPixel != format->bpp)
         goto failed;
 
     close_planes (params);
@@ -252,6 +253,7 @@ create_buffer (struct wl_client *client, struct wl_resource *resource,
     buffer->base = (MbBuffer){
         .width = width,
         .height = height,
+        .render_format = format->render_format,
         .snapshot = dmabuf_snapshot,
         .destroy = dmabuf_buffer_destroy,
     };
@@ -395,7 +397,7 @@ mb_dmabuf_initialize (void)
                                  formats[i].render_format))
             continue;
         /* DRI3's modifier query indexes RGB FourCCs by its bpp argument:
-         * 24 selects XRGB8888 and 32 selects ARGB8888. Both import at 32 bpp.
+         * use the format's depth here, and its storage bpp when importing.
          */
         if (dri3_get_supported_modifiers (
                 screen, &screen->root->drawable, formats[i].depth,

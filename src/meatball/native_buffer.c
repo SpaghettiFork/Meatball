@@ -64,6 +64,28 @@ mb_buffer_acquire (struct wl_resource *resource)
 }
 
 PixmapPtr
+mb_pixmap_upload (ScreenPtr screen, unsigned int width, unsigned int height,
+                  unsigned int depth, char *pixels)
+{
+    PixmapPtr copy = screen->CreatePixmap (screen, width, height, depth, 0);
+    GCPtr gc;
+
+    if (!copy)
+        return NULL;
+    gc = GetScratchGC (depth, screen);
+    if (!gc)
+    {
+        screen->DestroyPixmap (copy);
+        return NULL;
+    }
+    ValidateGC (&copy->drawable, gc);
+    gc->ops->PutImage (&copy->drawable, gc, depth, 0, 0, width, height, 0,
+                       ZPixmap, pixels);
+    FreeScratchGC (gc);
+    return copy;
+}
+
+PixmapPtr
 mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert)
 {
     ScreenPtr screen = imported->drawable.pScreen;
@@ -72,8 +94,7 @@ mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert)
     unsigned int height = imported->drawable.height;
     size_t stride = PixmapBytePad (width, depth);
     size_t size = stride * height;
-    PixmapPtr copy = NULL;
-    GCPtr gc;
+    PixmapPtr copy;
     char *pixels;
 
     if (size > MB_MAX_SNAPSHOT_BYTES)
@@ -97,22 +118,7 @@ mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert)
             memcpy (bottom, scratch, stride);
         }
     }
-    copy = screen->CreatePixmap (screen, width, height, depth, 0);
-    if (!copy)
-        goto done;
-    gc = GetScratchGC (depth, screen);
-    if (!gc)
-    {
-        screen->DestroyPixmap (copy);
-        copy = NULL;
-        goto done;
-    }
-    ValidateGC (&copy->drawable, gc);
-    gc->ops->PutImage (&copy->drawable, gc, depth, 0, 0, width, height, 0,
-                       ZPixmap, pixels);
-    FreeScratchGC (gc);
-
-done:
+    copy = mb_pixmap_upload (screen, width, height, depth, pixels);
     free (pixels);
     return copy;
 }
