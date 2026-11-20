@@ -27,9 +27,11 @@
 #include <extension.h>
 #include <extnsionst.h>
 #include <opaque.h>
+#include <os.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <xf86Module.h>
 #include <xf86Optionstr.h>
 
@@ -38,15 +40,18 @@
 #define SOCKET_PATH_OPTION "SocketPath"
 #define SOCKET_MODE_OPTION "SocketMode"
 #define RUNTIME_DIRECTORY_ENV "XDG_RUNTIME_DIR"
+#define SOCKET_CHECK_INTERVAL_MS 1000
 
 static MODULESETUPPROTO (sauce_setup);
 static MODULETEARDOWNPROTO (sauce_shutdown);
-static void sauce_start (void *data, void *timeout);
+static void sauce_check_socket (void *data, void *timeout);
 static void sauce_wakeup (void *data, int result);
 
-static Bool start_pending;
+static Bool monitor_registered;
+static Bool waiting_for_directory;
+static CARD32 next_socket_check;
 static Bool disabled;
-static char *socket_path;
+static char *socket_path, *socket_directory;
 static struct meatball_config config = {
     .socket_mode = MEATBALL_DEFAULT_SOCKET_MODE,
 };
@@ -79,11 +84,12 @@ sauce_request (ClientPtr client)
 static void
 sauce_reset (ExtensionEntry *extension)
 {
-    if (start_pending)
+    if (monitor_registered)
     {
-        RemoveBlockAndWakeupHandlers (sauce_start, sauce_wakeup, NULL);
-        start_pending = FALSE;
+        RemoveBlockAndWakeupHandlers (sauce_check_socket, sauce_wakeup, NULL);
+        monitor_registered = FALSE;
     }
+    waiting_for_directory = FALSE;
     meatball_shutdown ();
 }
 
@@ -93,12 +99,47 @@ sauce_wakeup (void *data, int result)
 }
 
 static void
-sauce_start (void *data, void *timeout)
+sauce_check_socket (void *data, void *timeout)
 {
-    RemoveBlockAndWakeupHandlers (sauce_start, sauce_wakeup, NULL);
-    start_pending = FALSE;
+    CARD32 now = GetTimeInMillis ();
+    INT32 delay = next_socket_check - now;
+    struct stat info;
+
+    if (delay > 0)
+    {
+        AdjustWaitForDelay (timeout, delay);
+        return;
+    }
+    if (meatball_running ())
+    {
+        if (lstat (socket_path, &info) == 0 || errno != ENOENT)
+            goto wait;
+        LogMessage (X_WARNING, "sauce: Wayland socket disappeared\n");
+        meatball_shutdown ();
+    }
+    if (stat (socket_directory, &info) < 0 && errno == ENOENT)
+    {
+        if (!waiting_for_directory)
+            LogMessage (X_INFO,
+                        "sauce: Waiting for the Wayland socket directory\n");
+        waiting_for_directory = TRUE;
+        goto wait;
+    }
+    waiting_for_directory = FALSE;
     if (!meatball_initialize (&config))
+    {
+        /* The runtime directory can disappear between the check and bind. */
+        if (stat (socket_directory, &info) < 0 && errno == ENOENT)
+            goto wait;
         LogMessage (X_ERROR, "sauce: Meatball initialization failed\n");
+        RemoveBlockAndWakeupHandlers (sauce_check_socket, sauce_wakeup, NULL);
+        monitor_registered = FALSE;
+        return;
+    }
+
+wait:
+    next_socket_check = now + SOCKET_CHECK_INTERVAL_MS;
+    AdjustWaitForDelay (timeout, SOCKET_CHECK_INTERVAL_MS);
 }
 
 static void
@@ -110,9 +151,10 @@ sauce_initialize (void)
         LogMessage (X_ERROR, "sauce: Extension registration failed\n");
         return;
     }
-    start_pending =
-        RegisterBlockAndWakeupHandlers (sauce_start, sauce_wakeup, NULL);
-    if (!start_pending)
+    next_socket_check = GetTimeInMillis ();
+    monitor_registered = RegisterBlockAndWakeupHandlers (sauce_check_socket,
+                                                         sauce_wakeup, NULL);
+    if (!monitor_registered)
         LogMessage (X_ERROR, "sauce: Startup handler registration failed\n");
 }
 
@@ -185,6 +227,19 @@ sauce_setup (void *module, void *opts, int *errmaj, int *errmin)
     }
     if (socket_path[0] != '/')
         goto invalid;
+    const char *separator = strrchr (socket_path, '/');
+    size_t parent_length =
+        separator == socket_path ? 1 : separator - socket_path;
+
+    socket_directory = strndup (socket_path, parent_length);
+    if (!socket_directory)
+    {
+        free (socket_path);
+        socket_path = NULL;
+        if (errmaj)
+            *errmaj = LDR_NOMEM;
+        return NULL;
+    }
     config.socket_path = socket_path;
     LoadExtensionList (&extension, 1, FALSE);
     initialized = TRUE;
@@ -206,6 +261,8 @@ static void
 sauce_shutdown (void *data)
 {
     sauce_reset (NULL);
+    free (socket_directory);
+    socket_directory = NULL;
     free (socket_path);
     socket_path = NULL;
     config.socket_path = NULL;

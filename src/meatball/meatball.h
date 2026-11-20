@@ -52,6 +52,8 @@ extern _X_EXPORT void meatball_version (unsigned long *version);
 extern _X_EXPORT _MEATBALL_BOOL
 meatball_initialize (const struct meatball_config *config);
 
+extern _MEATBALL_BOOL meatball_running (void);
+
 /* Safe before initialization and after a previous shutdown. */
 extern _X_EXPORT void meatball_shutdown (void);
 

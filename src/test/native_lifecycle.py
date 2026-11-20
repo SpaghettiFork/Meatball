@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from host_support import connect_x11, receive_exact, server, STARTUP_TIMEOUT
+from wayland_support import Wayland
 
 QUERY_EXTENSION = 98
 X11_REPLY_SIZE = 32
@@ -20,6 +21,7 @@ POLL_INTERVAL = 0.01
 RESET_ATTEMPTS = 3
 CUSTOM_SOCKET_MODE = 0o640
 SOCKET_PREFIX = "wayland-meatball-"
+KILL_CLIENT = 113
 
 
 def check_extension(connection):
@@ -87,6 +89,58 @@ def check_failed_start(host, module, path):
         assert not path.exists()
 
 
+def check_runtime_directory(host, module, directory):
+    path = directory / "wayland"
+    with server(host, module, {"MEATBALL_TEST_SOCKET": str(path)}) as (process, display):
+        with connect_x11(display) as connection:
+            check_extension(connection)
+            assert not path.exists()
+            directory.mkdir()
+            wait_socket(path, process)
+            with connect_wayland(path) as old:
+                path.unlink()
+                path.with_suffix(".lock").unlink()
+                directory.rmdir()
+                try:
+                    assert old.recv(1) == b"", "Wayland client survived socket removal"
+                except ConnectionResetError:
+                    pass
+            directory.mkdir()
+            wait_socket(path, process)
+            client = Wayland(path)
+            try:
+                client.sync()
+            finally:
+                client.close()
+            check_extension(connection)
+    assert not path.exists()
+
+
+def check_bridge_closed(host, module, path):
+    with server(host, module, {"MEATBALL_TEST_SOCKET": str(path)}) as (process, display):
+        connection, setup = connect_x11(display, return_setup=True)
+        # The isolated server has one root and only the bridge's selection
+        # window at this point.
+        from native_surfaces import query_tree, root_window
+        with connection:
+            wait_socket(path, process)
+            window, = query_tree(connection, root_window(setup))
+            with connect_wayland(path) as old:
+                connection.sendall(struct.pack("<BBHI", KILL_CLIENT, 0, 2, window))
+                try:
+                    assert old.recv(1) == b"", "Wayland client survived bridge loss"
+                except ConnectionResetError:
+                    pass
+            wait_socket(path, process)
+            client = Wayland(path)
+            try:
+                client.sync()
+            finally:
+                client.close()
+            check_extension(connection)
+    assert not path.exists()
+
+
 def check_conflict(host, module, path):
     environment = {"MEATBALL_TEST_SOCKET": str(path)}
     with server(host, module, environment) as (first, display):
@@ -135,6 +189,8 @@ def main():
         root = Path(directory)
         check_lifecycle(host, module, root / "wayland")
         check_failed_start(host, module, root / "missing" / "wayland")
+        check_runtime_directory(host, module, root / "runtime")
+        check_bridge_closed(host, module, root / "bridge")
         check_conflict(host, module, root / "wayland")
         check_configuration(host, module, root)
         check_capabilities(host, module, root)
