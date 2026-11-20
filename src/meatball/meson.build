@@ -44,6 +44,14 @@ constraints_code = custom_target('native-constraints-code',
                                  input: constraints_xml, output: 'pointer-constraints.c',
                                  command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+relative_pointer_xml = 'wayland-proto/relative-pointer-unstable-v1.xml'
+relative_pointer_header = custom_target('native-relative-pointer-header',
+                                      input: relative_pointer_xml, output: 'relative-pointer.h',
+                                      command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+relative_pointer_code = custom_target('native-relative-pointer-code',
+                                    input: relative_pointer_xml, output: 'relative-pointer.c',
+                                    command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -76,6 +84,8 @@ srcs_meatball = [
     dmabuf_code,
     constraints_header,
     constraints_code,
+    relative_pointer_header,
+    relative_pointer_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

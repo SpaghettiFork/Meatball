@@ -36,6 +36,8 @@ __attribute__ ((used)) static __typeof__ (&XISetEventMask) select_input =
     XISetEventMask;
 __attribute__ ((used)) static RESTYPE *keyboard_subscription_type =
     &RT_XKBCLIENT;
+__attribute__ ((used)) static CallbackListPtr *relative_motion =
+    &RelativeMotionCallback;
 #ifdef XACE
 __attribute__ ((
     used)) static __typeof__ (&XaceHookSendAccess) check_send_access =
