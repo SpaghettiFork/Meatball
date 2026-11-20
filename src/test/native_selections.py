@@ -12,10 +12,13 @@ import tempfile
 
 from host_support import connect_x11, receive_exact, server, STARTUP_TIMEOUT
 from native_data import (mapped, focus, receive_pipe, offered, MIME_TEXT,
-                         MIME_BINARY, PAYLOAD, SOURCE_DESTROY, SOURCE_CANCELLED)
+                         MIME_BINARY, PAYLOAD, SOURCE_DESTROY, SOURCE_CANCELLED,
+                         PEER_ORIGIN)
 from native_input import XInput
 from native_lifecycle import wait_socket
 from native_surfaces import root_window
+from native_xdg import string_argument
+from native_outputs import string
 
 SELECTION_CLEAR = 29
 SELECTION_REQUEST = 30
@@ -361,6 +364,149 @@ def check_clipboard(path, display):
         connection.close()
 
 
+PRIMARY_MANAGER = "zwp_primary_selection_device_manager_v1"
+PRIMARY_CREATE_SOURCE = 0
+PRIMARY_GET_DEVICE = 1
+PRIMARY_SET_SELECTION = 0
+PRIMARY_SELECTION = 1
+PRIMARY_SEND = 0
+PRIMARY_CANCELLED = 1
+PRIMARY_RECEIVE = 0
+PRIMARY_SOURCE_OFFER = 0
+PRIMARY_SOURCE_DESTROY = 1
+
+
+def bind_primary(client):
+    manager = client.bind(PRIMARY_MANAGER)
+    device = client.allocate_id()
+    client.send(manager, PRIMARY_GET_DEVICE, struct.pack("=II", device, client.seat))
+    client.sync()
+    return manager, device
+
+
+def primary_source(client, manager):
+    source = client.allocate_id()
+    client.send(manager, PRIMARY_CREATE_SOURCE, struct.pack("=I", source))
+    client.send(source, PRIMARY_SOURCE_OFFER, string_argument(MIME_TEXT))
+    return source
+
+
+def primary_offer(client, device, expected):
+    while True:
+        payload, events = client.until(device, PRIMARY_SELECTION)
+        offer, = struct.unpack("=I", payload)
+        if expected and not offer:
+            continue
+        assert bool(offer) == expected
+        if offer:
+            assert MIME_TEXT in offered(events, offer)
+        return offer
+
+
+def primary_receive(client, offer):
+    reader, writer = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        client.send(offer, PRIMARY_RECEIVE, string_argument(MIME_TEXT), fds=[writer])
+    finally:
+        os.close(writer)
+    return reader
+
+
+def primary_send(client, source):
+    payload, _ = client.until(source, PRIMARY_SEND)
+    assert string(payload)[0] == MIME_TEXT
+    fd = client.fds.pop(0)
+    try:
+        assert os.write(fd, PAYLOAD) == len(PAYLOAD)
+    finally:
+        os.close(fd)
+
+
+def check_primary(path, display):
+    connection, setup = connect_x11(display, return_setup=True)
+    actor = XInput(connection, root_window(setup))
+    client, window = mapped(path, actor, actor.root)
+    receiver, receiver_window = mapped(path, actor, actor.root, origin=PEER_ORIGIN)
+    peer = XSelections(display)
+    try:
+        manager, device = bind_primary(client)
+        receiver_manager, receiver_device = bind_primary(receiver)
+        serial, _ = focus(client, actor, window)
+        clipboard = client.source()
+        client.set_selection(clipboard, serial)
+        client.selection()
+        client.sync()
+        clipboard_owner = peer.owner()
+        assert clipboard_owner and peer.owner("PRIMARY") == 0
+
+        source = primary_source(client, manager)
+        client.send(device, PRIMARY_SET_SELECTION, struct.pack("=II", source, serial))
+        old_offer = primary_offer(client, device, True)
+        assert peer.owner("PRIMARY") == clipboard_owner
+        peer.convert("UTF8_STRING", selection="PRIMARY")
+        primary_send(client, source)
+        assert peer.result("PRIMARY") == (peer.atom("UTF8_STRING"), 8, PAYLOAD)
+
+        receiver_serial, events = focus(receiver, actor, receiver_window)
+        selections = [struct.unpack("=I", data)[0] for obj, opcode, data in events
+                      if obj == receiver_device and opcode == PRIMARY_SELECTION]
+        offer = selections[-1] if selections else primary_offer(receiver, receiver_device, True)
+        assert offer
+        primary_offer(client, device, False)
+        reader = primary_receive(client, old_offer)
+        try:
+            assert pipe_result(reader) == b""
+        finally:
+            os.close(reader)
+
+        replacement = primary_source(receiver, receiver_manager)
+        receiver.send(receiver_device, PRIMARY_SET_SELECTION,
+                      struct.pack("=II", replacement, serial))
+        receiver.sync()
+        reader = primary_receive(receiver, offer)
+        try:
+            primary_send(client, source)
+            assert pipe_result(reader) == PAYLOAD
+        finally:
+            os.close(reader)
+
+        peer.own("PRIMARY")
+        client.until(source, PRIMARY_CANCELLED)
+        request = peer.request("TARGETS")
+        assert request[2] == peer.atom("PRIMARY")
+        peer.answer(request, XA_ATOM, [peer.atom("UTF8_STRING")], 32)
+        foreign_offer = primary_offer(receiver, receiver_device, True)
+        reader = primary_receive(receiver, foreign_offer)
+        try:
+            request = peer.request("UTF8_STRING")
+            assert request[2] == peer.atom("PRIMARY")
+            peer.answer(request, peer.atom("UTF8_STRING"), PAYLOAD)
+            assert pipe_result(reader) == PAYLOAD
+        finally:
+            os.close(reader)
+
+        receiver.send(receiver_device, PRIMARY_SET_SELECTION,
+                      struct.pack("=II", replacement, receiver_serial))
+        primary_offer(receiver, receiver_device, True)
+        assert peer.owner("PRIMARY") == clipboard_owner
+        receiver.send(replacement, PRIMARY_SOURCE_DESTROY)
+        primary_offer(receiver, receiver_device, False)
+        assert peer.owner("PRIMARY") == 0 and peer.owner() == clipboard_owner
+        peer.convert("UTF8_STRING")
+        mime, fd = client.send_fd(clipboard)
+        try:
+            assert mime == MIME_TEXT
+            assert os.write(fd, PAYLOAD) == len(PAYLOAD)
+        finally:
+            os.close(fd)
+        assert peer.result() == (peer.atom("UTF8_STRING"), 8, PAYLOAD)
+    finally:
+        peer.close()
+        receiver.close()
+        client.close()
+        connection.close()
+
+
 def main():
     host, module = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="meatball-selections-") as directory:
@@ -380,6 +526,7 @@ def main():
             with connect_x11(display):
                 wait_socket(path, process)
             check_clipboard(path, display)
+            check_primary(path, display)
             assert process.poll() is None
 
 

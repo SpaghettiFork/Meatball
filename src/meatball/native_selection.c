@@ -24,7 +24,7 @@
 
 typedef struct
 {
-    Atom clipboard, targets, timestamp, incr, text, multiple, atom_pair;
+    Atom targets, timestamp, incr, text, multiple, atom_pair;
     Atom transfer, xdnd;
 } SelectionAtoms;
 
@@ -71,16 +71,34 @@ typedef struct
     Window window;
 } ForeignWatch;
 
+typedef struct
+{
+    Atom atom;
+    MbDataSource *exported, *imported;
+    uint64_t seat;
+    TimeStamp ownership;
+    Bool dirty;
+} SelectionChannel;
+
 struct MbSelections
 {
     SelectionAtoms atoms;
+    SelectionChannel channels[MB_SELECTION_COUNT];
     struct wl_list transfers, imports, watches;
     Window window;
-    MbDataSource *exported, *imported, *drag;
-    uint64_t seat;
-    TimeStamp ownership, drag_time;
-    Bool dirty, registered, stopping;
+    MbDataSource *drag;
+    TimeStamp drag_time;
+    Bool registered, stopping;
 };
+
+static SelectionChannel *
+selection_channel (struct MbSelections *selections, Atom atom)
+{
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+        if (selections->channels[kind].atom == atom)
+            return &selections->channels[kind];
+    return NULL;
+}
 
 static void transfer_destroy (Transfer *transfer);
 static void import_targets (Transfer *transfer);
@@ -734,10 +752,13 @@ static void
 import_targets (Transfer *transfer)
 {
     struct MbSelections *selections = compositor.selections;
+    SelectionChannel *channel =
+        selection_channel (selections, transfer->selection);
     Selection *selection;
     MbDataSource *source;
 
-    if (dixLookupSelection (&selection, transfer->selection, bridge (),
+    if (!channel ||
+        dixLookupSelection (&selection, transfer->selection, bridge (),
                             DixReadAccess) != Success ||
         selection->window != transfer->owner ||
         CompareTimeStamps (selection->lastTimeChanged, transfer->epoch) !=
@@ -748,8 +769,8 @@ import_targets (Transfer *transfer)
                                   transfer->atom_count, 0, NULL, NULL);
     if (source)
     {
-        selections->imported = source;
-        mb_data_import_selection (source);
+        channel->imported = source;
+        mb_data_import_selection (channel - selections->channels, source);
     }
 }
 
@@ -797,13 +818,14 @@ selection_request (const xEvent *event)
     const char *const *mimes;
     size_t count;
     Atom type = request.target;
+    SelectionChannel *channel =
+        selection_channel (selections, request.selection);
     MbDataSource *source =
-        request.selection == selections->atoms.clipboard ? selections->exported
-        : request.selection == selections->atoms.xdnd    ? selections->drag
-                                                         : NULL;
-    TimeStamp ownership = request.selection == selections->atoms.clipboard
-                              ? selections->ownership
-                              : selections->drag_time;
+        channel
+            ? channel->exported
+            : (request.selection == selections->atoms.xdnd ? selections->drag
+                                                           : NULL);
+    TimeStamp ownership = channel ? channel->ownership : selections->drag_time;
     int pipes[2];
 
     if (!request.property)
@@ -978,31 +1000,36 @@ selection_changed (CallbackListPtr *list, void *data, void *value)
     struct MbSelections *selections = data;
     SelectionInfoRec *info = value;
 
-    if (info->selection->selection == selections->atoms.clipboard)
-        selections->dirty = TRUE;
+    SelectionChannel *channel =
+        selection_channel (selections, info->selection->selection);
+
+    if (channel)
+        channel->dirty = TRUE;
 }
 
 static void
-export_selection (void *data, uint64_t seat, MbDataSource *source)
+export_selection (void *data, MbSelectionKind kind, uint64_t seat,
+                  MbDataSource *source)
 {
     struct MbSelections *selections = data;
+    SelectionChannel *channel = &selections->channels[kind];
     MbDataSource *imported;
 
-    if (selections->stopping || (source && source == selections->imported) ||
-        (!source && selections->exported && seat != selections->seat))
+    if (selections->stopping || (source && source == channel->imported) ||
+        (!source && channel->exported && seat != channel->seat))
         return;
-    imported = selections->imported;
-    selections->imported = NULL;
-    selections->exported = source;
-    selections->seat = seat;
+    imported = channel->imported;
+    channel->imported = NULL;
+    channel->exported = source;
+    channel->seat = seat;
     if (imported)
         mb_data_source_destroy (imported);
     UpdateCurrentTime ();
-    selections->ownership = currentTime;
-    if (dixSetSelectionOwner (bridge (), selections->atoms.clipboard,
+    channel->ownership = currentTime;
+    if (dixSetSelectionOwner (bridge (), channel->atom,
                               source ? selections->window : None,
                               currentTime) != Success)
-        selections->exported = NULL;
+        channel->exported = NULL;
 }
 
 static void
@@ -1010,19 +1037,22 @@ source_destroyed (void *data, MbDataSource *source)
 {
     struct MbSelections *selections = data;
 
-    if (source == selections->imported)
-        selections->imported = NULL;
-    if (source == selections->exported)
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
     {
+        SelectionChannel *channel = &selections->channels[kind];
         Selection *selection;
 
+        if (source == channel->imported)
+            channel->imported = NULL;
+        if (source != channel->exported)
+            continue;
         if (bridge () &&
-            dixLookupSelection (&selection, selections->atoms.clipboard,
-                                bridge (), DixReadAccess) == Success &&
+            dixLookupSelection (&selection, channel->atom, bridge (),
+                                DixReadAccess) == Success &&
             selection->window == selections->window)
-            export_selection (data, selections->seat, NULL);
+            export_selection (data, kind, channel->seat, NULL);
         else
-            selections->exported = NULL;
+            channel->exported = NULL;
     }
     if (source == selections->drag)
         mb_selection_claim_drag (NULL);
@@ -1033,8 +1063,22 @@ seat_removed (void *data, uint64_t seat)
 {
     struct MbSelections *selections = data;
 
-    if (selections->exported && selections->seat == seat)
-        export_selection (data, seat, NULL);
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+    {
+        SelectionChannel *channel = &selections->channels[kind];
+
+        if (channel->exported && channel->seat == seat)
+        {
+            Selection *selection;
+
+            if (dixLookupSelection (&selection, channel->atom, bridge (),
+                                    DixReadAccess) == Success &&
+                selection->window == selections->window)
+                export_selection (data, kind, seat, NULL);
+            else
+                channel->exported = NULL;
+        }
+    }
 }
 
 static const MbDataBridge data_bridge = {
@@ -1047,34 +1091,40 @@ void
 mb_selections_dispatch (void)
 {
     struct MbSelections *selections = compositor.selections;
-    Selection *selection;
-    Transfer *transfer, *next;
+    if (!selections)
+        return;
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+    {
+        SelectionChannel *channel = &selections->channels[kind];
+        Selection *selection;
+        Transfer *transfer, *next;
 
-    if (!selections || !selections->dirty)
-        return;
-    selections->dirty = FALSE;
-    if (dixLookupSelection (&selection, selections->atoms.clipboard, bridge (),
-                            DixReadAccess) != Success)
-        return;
-    if (selection->window == selections->window)
-        return;
-    selections->exported = NULL;
-    selections->imported = NULL;
-    mb_data_import_selection (NULL);
-    wl_list_for_each_safe (transfer, next, &selections->transfers, link)
-    {
-        if (transfer->incoming && transfer->targets)
-            transfer_destroy (transfer);
-    }
-    if (!selection->window)
-        return;
-    transfer = incoming_create (selection->window, selection->selection,
-                                selections->atoms.targets,
-                                selection->lastTimeChanged, -1);
-    if (transfer)
-    {
-        transfer->targets = TRUE;
-        selection_convert (transfer);
+        if (!channel->dirty)
+            continue;
+        channel->dirty = FALSE;
+        if (dixLookupSelection (&selection, channel->atom, bridge (),
+                                DixReadAccess) != Success ||
+            selection->window == selections->window)
+            continue;
+        channel->exported = NULL;
+        channel->imported = NULL;
+        mb_data_import_selection (kind, NULL);
+        wl_list_for_each_safe (transfer, next, &selections->transfers, link)
+        {
+            if (transfer->incoming && transfer->targets &&
+                transfer->selection == channel->atom)
+                transfer_destroy (transfer);
+        }
+        if (!selection->window)
+            continue;
+        transfer = incoming_create (selection->window, selection->selection,
+                                    selections->atoms.targets,
+                                    selection->lastTimeChanged, -1);
+        if (transfer)
+        {
+            transfer->targets = TRUE;
+            selection_convert (transfer);
+        }
     }
 }
 
@@ -1094,7 +1144,7 @@ mb_selections_initialize (void)
         const char *name;
         Atom *atom;
     } atoms[] = {
-        { "CLIPBOARD", &selections->atoms.clipboard },
+        { "CLIPBOARD", &selections->channels[MB_SELECTION_CLIPBOARD].atom },
         { "XdndSelection", &selections->atoms.xdnd },
         { "TARGETS", &selections->atoms.targets },
         { "TIMESTAMP", &selections->atoms.timestamp },
@@ -1116,7 +1166,9 @@ mb_selections_initialize (void)
         !AddCallback (&SelectionCallback, selection_changed, selections))
         goto fail;
     selections->registered = TRUE;
-    selections->dirty = TRUE;
+    selections->channels[MB_SELECTION_PRIMARY].atom = XA_PRIMARY;
+    for (MbSelectionKind kind = 0; kind < MB_SELECTION_COUNT; kind++)
+        selections->channels[kind].dirty = TRUE;
     compositor.bridge_client->output = bridge_output;
     mb_data_set_bridge (&data_bridge, selections);
     return TRUE;
