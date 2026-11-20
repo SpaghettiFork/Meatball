@@ -14,7 +14,7 @@ from native_input import (BUTTON_PRESS, BUTTON_RELEASE, KEY_A, KEY_PRESS,
 from native_interactive import UNGRAB_POINTER, wm_grab
 from native_lifecycle import POLL_INTERVAL, wait_socket
 from native_subsurfaces import (CONFIGURE_WINDOW, CW_POSITION, GET_GEOMETRY,
-                                X11_REPLY_SIZE, publish, solid)
+                                X11_REPLY_SIZE, publish, rectangle, solid)
 from native_surfaces import create_surface, input_output_windows, query_tree, root_window
 from native_transforms import image
 from native_xdg import (CONFIGURE_EVENT, UNMAPPED, VIEWABLE, XDG_ACK_CONFIGURE,
@@ -124,7 +124,9 @@ def check_popup(path, actor, root):
         assert rect == (20, 38, 20, 24), (rect, geometry(x11, window))
         native, = query_tree(x11, root) - before
         assert map_state(x11, native) == UNMAPPED
-        publish(client, surface, solid(POPUP_COLOR, 20, 24))
+        client.send(shell, XDG_GEOMETRY, struct.pack("=iiii", 2, 3, 20, 24))
+        publish(client, surface, rectangle(solid(PARENT_COLOR, 24, 30),
+                                           POPUP_COLOR, 2, 3, 20, 24))
         assert geometry(x11, native) == (PARENT_X + 20, PARENT_Y + 38, 20, 24)
         assert map_state(x11, native) == VIEWABLE
         assert image(x11, native, 20, 24) == (POPUP_COLOR,) * (20 * 24)

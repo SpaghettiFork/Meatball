@@ -48,6 +48,7 @@ typedef struct
     struct MbXdgSurface *owner;
     Bool geometry_set;
     int32_t x, y, width, height;
+    int32_t popup_x, popup_y;
     uint32_t serial;
 } MbXdgCommitState;
 

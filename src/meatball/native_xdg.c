@@ -66,10 +66,16 @@ struct XdgBase
     unsigned int refs, children;
 };
 
+struct PopupGeometry
+{
+    int32_t x, y, width, height;
+};
+
 struct Configure
 {
     struct wl_list link;
     uint32_t serial;
+    struct PopupGeometry popup;
 };
 
 struct Positioner
@@ -999,12 +1005,11 @@ parent_origin (struct MbXdgSurface *parent, int64_t *x, int64_t *y)
     return TRUE;
 }
 
-static void
-place_popup (struct MbXdgSurface *xdg, int64_t x, int64_t y, int32_t *width,
-             int32_t *height)
+static struct PopupGeometry
+place_popup (ScreenPtr screen, const struct Positioner *p, int64_t x,
+             int64_t y)
 {
-    const struct Positioner *p = &xdg->positioner;
-    ScreenPtr screen = xdg->surface->window.screen;
+    struct PopupGeometry result;
     const struct PopupAxis horizontal = {
         p->offset_x,
         p->anchor_x,
@@ -1028,7 +1033,8 @@ place_popup (struct MbXdgSurface *xdg, int64_t x, int64_t y, int32_t *width,
         !!(p->adjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y),
     };
     int left = 0, top = 0, right = screen->width, bottom = screen->height;
-    rrScrPrivPtr randr = rrGetScrPriv (screen);
+    rrScrPrivPtr randr =
+        rrPrivKeyRec.initialized ? rrGetScrPriv (screen) : NULL;
     int64_t anchor_x = x + horizontal.anchor +
                        (horizontal.edge + 1) * (int64_t)horizontal.extent / 2;
     int64_t anchor_y = y + vertical.anchor +
@@ -1059,8 +1065,9 @@ place_popup (struct MbXdgSurface *xdg, int64_t x, int64_t y, int32_t *width,
             }
         }
     }
-    place_axis (horizontal, left - x, right - x, &xdg->popup_x, width);
-    place_axis (vertical, top - y, bottom - y, &xdg->popup_y, height);
+    place_axis (horizontal, left - x, right - x, &result.x, &result.width);
+    place_axis (vertical, top - y, bottom - y, &result.y, &result.height);
+    return result;
 }
 
 static void
@@ -1329,6 +1336,11 @@ ack_configure (struct wl_client *client, struct wl_resource *resource,
                                 "unknown configure serial");
         return;
     }
+    if (xdg->popup)
+    {
+        xdg->pending.popup_x = match->popup.x;
+        xdg->pending.popup_y = match->popup.y;
+    }
     wl_list_for_each_safe (configure, next, &xdg->configures, link)
     {
         Bool done = configure == match;
@@ -1488,10 +1500,41 @@ bind_xdg (struct wl_client *client, void *data, uint32_t version, uint32_t id)
                                     base_destroyed);
 }
 
+static struct Configure *
+queue_configure (struct MbXdgSurface *xdg)
+{
+    struct Configure *configure;
+
+    if (xdg->configure_count == CONFIGURE_LIMIT)
+        return NULL;
+    configure = calloc (1, sizeof (*configure));
+    if (!configure)
+        return NULL;
+    configure->serial = wl_display_next_serial (compositor.wl_display);
+    xdg->last_serial = configure->serial;
+    wl_list_insert (xdg->configures.prev, &configure->link);
+    xdg->configure_count++;
+    return configure;
+}
+
+static Bool
+send_popup_configure (struct MbXdgSurface *xdg, struct PopupGeometry geometry)
+{
+    struct Configure *configure = queue_configure (xdg);
+
+    if (!configure)
+        return FALSE;
+    configure->popup = geometry;
+    xdg_popup_send_configure (xdg->popup, geometry.x, geometry.y,
+                              geometry.width, geometry.height);
+    xdg_surface_send_configure (xdg->resource, configure->serial);
+    return TRUE;
+}
+
 static Bool
 send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
 {
-    struct Configure *configure;
+    struct Configure *configure = queue_configure (xdg);
     WindowPtr window = mb_window_get (&xdg->surface->window, DixGetPropAccess);
     PropertyPtr property;
     CARD32 states[MAX_TOPLEVEL_STATES];
@@ -1500,20 +1543,13 @@ send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
          focused = FALSE;
     struct wl_array array = { 0 };
 
-    if (xdg->configure_count == CONFIGURE_LIMIT)
-        return FALSE;
-    configure = calloc (1, sizeof (*configure));
     if (!configure)
         return FALSE;
-    if (xdg->popup)
-        xdg_popup_send_configure (xdg->popup, xdg->popup_x, xdg->popup_y,
-                                  width, height);
-    else if (window &&
-             dixLookupProperty (
-                 &property, window, compositor.atoms.net_wm_state,
-                 xdg->surface->client->native, DixReadAccess) == Success &&
-             property->type == XA_ATOM &&
-             property->format == MB_PROPERTY_FORMAT_32)
+    if (window &&
+        dixLookupProperty (&property, window, compositor.atoms.net_wm_state,
+                           xdg->surface->client->native,
+                           DixReadAccess) == Success &&
+        property->type == XA_ATOM && property->format == MB_PROPERTY_FORMAT_32)
     {
         unsigned int i;
         const CARD32 *atoms = property->data;
@@ -1534,14 +1570,9 @@ send_configure (struct MbXdgSurface *xdg, int32_t width, int32_t height)
         states[count++] = XDG_TOPLEVEL_STATE_ACTIVATED;
     array.size = count * sizeof (*states);
     array.data = states;
-    configure->serial = wl_display_next_serial (compositor.wl_display);
-    xdg->last_serial = configure->serial;
-    wl_list_insert (xdg->configures.prev, &configure->link);
-    xdg->configure_count++;
     xdg->last_width = width;
     xdg->last_height = height;
-    if (xdg->toplevel)
-        xdg_toplevel_send_configure (xdg->toplevel, width, height, &array);
+    xdg_toplevel_send_configure (xdg->toplevel, width, height, &array);
     xdg_surface_send_configure (xdg->resource, configure->serial);
     return TRUE;
 }
@@ -1578,7 +1609,7 @@ mb_xdg_commit (MbSurface *surface)
     }
     if (!xdg->initialized)
     {
-        int32_t width = 0, height = 0;
+        Bool sent;
 
         if (xdg->popup)
         {
@@ -1596,9 +1627,13 @@ mb_xdg_commit (MbSurface *surface)
                                         "popup parent is not mapped");
                 return FALSE;
             }
-            place_popup (xdg, x, y, &width, &height);
+            sent = send_popup_configure (
+                xdg,
+                place_popup (surface->window.screen, &xdg->positioner, x, y));
         }
-        if (!send_configure (xdg, width, height))
+        else
+            sent = send_configure (xdg, 0, 0);
+        if (!sent)
         {
             wl_resource_post_no_memory (xdg->resource);
             return FALSE;
@@ -1626,8 +1661,13 @@ mb_xdg_apply (MbSurfaceCommit *commit)
 {
     struct MbXdgSurface *xdg = commit->xdg.owner;
 
-    if (!xdg || !xdg->toplevel || commit->surface->xdg != xdg)
+    if (!xdg || (!xdg->toplevel && !xdg->popup) || commit->surface->xdg != xdg)
         return;
+    if (xdg->popup)
+    {
+        xdg->popup_x = commit->xdg.popup_x;
+        xdg->popup_y = commit->xdg.popup_y;
+    }
     xdg->geometry_set = commit->xdg.geometry_set;
     xdg->geometry_x = commit->xdg.x;
     xdg->geometry_y = commit->xdg.y;
