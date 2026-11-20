@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "server.h"
+#include "tearing-control.h"
 
 #include <X11/extensions/shapeconst.h>
 #include <extnsionst.h>
@@ -17,6 +18,7 @@
 #define MICROSECONDS_PER_MILLISECOND 1000
 #define SEND_EVENT_MASK 0x80
 #define SURFACE_COMMIT_LIMIT 256
+#define TEARING_CONTROL_VERSION 1
 
 static CARD32 next_frame_serial;
 
@@ -331,6 +333,8 @@ surface_destroyed (struct wl_resource *resource)
     mb_subsurface_surface_destroyed (surface);
     mb_xdg_surface_destroyed (surface);
     mb_viewport_surface_destroyed (surface);
+    if (surface->tearing_control)
+        wl_resource_set_user_data (surface->tearing_control, NULL);
     if (surface->frame_timer)
         wl_event_source_remove (surface->frame_timer);
     if (surface->pending_buffer)
@@ -647,6 +651,7 @@ capture_commit (MbSurface *surface)
     commit->crop = surface->pending_crop;
     commit->scale = surface->pending_scale;
     commit->transform = surface->pending_transform;
+    commit->tearing_async = surface->pending_tearing_async;
     commit->width = width;
     commit->height = height;
     if (!mb_input_capture_constraints (commit) ||
@@ -731,6 +736,7 @@ mb_surface_commit_apply (MbSurfaceCommit *commit)
     surface->crop = commit->crop;
     surface->scale = commit->scale;
     surface->transform = commit->transform;
+    surface->tearing_async = commit->tearing_async;
     surface->width = commit->width;
     surface->height = commit->height;
     if (surface->role != MB_ROLE_SUBSURFACE)
@@ -1024,6 +1030,86 @@ bind_compositor (struct wl_client *client, void *data, uint32_t version,
     wl_resource_set_implementation (resource, &implementation, NULL, NULL);
 }
 
+static void
+destroy_resource (struct wl_client *client, struct wl_resource *resource)
+{
+    wl_resource_destroy (resource);
+}
+
+static void
+tearing_control_destroyed (struct wl_resource *resource)
+{
+    MbSurface *surface = wl_resource_get_user_data (resource);
+
+    if (!surface)
+        return;
+    surface->tearing_control = NULL;
+    surface->pending_tearing_async = FALSE;
+}
+
+static void
+set_presentation_hint (struct wl_client *client, struct wl_resource *resource,
+                       uint32_t hint)
+{
+    MbSurface *surface = wl_resource_get_user_data (resource);
+
+    if (surface && (hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC ||
+                    hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC))
+        surface->pending_tearing_async =
+            hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
+}
+
+static const struct wp_tearing_control_v1_interface tearing_control = {
+    .set_presentation_hint = set_presentation_hint,
+    .destroy = destroy_resource,
+};
+
+static void
+get_tearing_control (struct wl_client *client, struct wl_resource *resource,
+                     uint32_t id, struct wl_resource *surface_resource)
+{
+    MbSurface *surface = wl_resource_get_user_data (surface_resource);
+
+    if (surface->tearing_control)
+    {
+        wl_resource_post_error (
+            resource,
+            WP_TEARING_CONTROL_MANAGER_V1_ERROR_TEARING_CONTROL_EXISTS,
+            "surface already has a tearing control object");
+        return;
+    }
+    surface->tearing_control =
+        wl_resource_create (client, &wp_tearing_control_v1_interface,
+                            wl_resource_get_version (resource), id);
+    if (!surface->tearing_control)
+    {
+        wl_resource_post_no_memory (resource);
+        return;
+    }
+    wl_resource_set_implementation (surface->tearing_control, &tearing_control,
+                                    surface, tearing_control_destroyed);
+}
+
+static const struct wp_tearing_control_manager_v1_interface tearing_manager = {
+    .destroy = destroy_resource,
+    .get_tearing_control = get_tearing_control,
+};
+
+static void
+bind_tearing_control (struct wl_client *client, void *data, uint32_t version,
+                      uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create (
+        client, &wp_tearing_control_manager_v1_interface, version, id);
+
+    if (!resource)
+    {
+        wl_client_post_no_memory (client);
+        return;
+    }
+    wl_resource_set_implementation (resource, &tearing_manager, NULL, NULL);
+}
+
 Bool
 mb_surfaces_initialize (void)
 {
@@ -1031,12 +1117,22 @@ mb_surfaces_initialize (void)
     compositor.surface_global =
         wl_global_create (compositor.wl_display, &wl_compositor_interface,
                           MB_COMPOSITOR_VERSION, NULL, bind_compositor);
-    return compositor.surface_global != NULL;
+    if (!compositor.surface_global)
+        return FALSE;
+    compositor.tearing_control_global = wl_global_create (
+        compositor.wl_display, &wp_tearing_control_manager_v1_interface,
+        TEARING_CONTROL_VERSION, NULL, bind_tearing_control);
+    return compositor.tearing_control_global != NULL;
 }
 
 void
 mb_surfaces_shutdown (void)
 {
+    if (compositor.tearing_control_global)
+    {
+        wl_global_destroy (compositor.tearing_control_global);
+        compositor.tearing_control_global = NULL;
+    }
     if (compositor.surface_global)
     {
         wl_global_destroy (compositor.surface_global);

@@ -47,8 +47,8 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
 The build scans xdg-shell, viewporter, primary-selection-unstable-v1,
-linux-dmabuf, pointer-constraints-unstable-v1, and
-relative-pointer-unstable-v1.
+linux-dmabuf, pointer-constraints-unstable-v1, relative-pointer-unstable-v1,
+and tearing-control-v1.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -263,6 +263,12 @@ frame callbacks uses NotifyMSC. Cursor images and windows without usable
 Present timing use a 16 ms timer. A window falls back to direct drawing and
 the timer if a Present completion stalls for 1.5 seconds.
 
+Version 1 `wp_tearing_control_manager_v1` applies its hints on surface
+commit. A toplevel's committed asynchronous hint lets Present copy its
+composed frame without waiting for vblank. Destroying the control resets
+the hint to vsync on the next commit. Each X11 window uses the hint from
+its root surface.
+
 ### Input
 
 Version 5 `wl_seat` exposes each enabled Xorg master pointer/keyboard pair.
@@ -376,7 +382,6 @@ Xdnd versions 1 and 2 are not implemented.
 - Text-input-v3 is deferred.
 - Server-side decoration negotiation.
 - `xdg-system-bell-v1`.
-- `tearing-control-v1`.
 
 ## Test inventory
 
@@ -417,8 +422,8 @@ Every check runs against the isolated module test host.
   reactive placement, protocol versions, serial validation, pointer and
   keyboard grabs, focus restoration, and grab cleanup on disconnect.
 - `native-present` checks copied pixels and matches Wayland frame callback
-  timestamps to X11 Present pixmap completion events. Later commits wait for
-  a separate refresh.
+  timestamps to X11 Present pixmap completion events. It checks synchronized
+  and asynchronous timing, reset to vsync, and duplicate tearing controls.
 - `native-transforms` checks all buffer orientations, integer scales, committed
   geometry, retained pixels after release, and invalid surface state.
 - `native-viewport` checks cropped pixels across buffer orientations and scales,

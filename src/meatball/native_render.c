@@ -194,13 +194,17 @@ mb_surface_redraw (MbSurface *surface, WindowPtr window, CARD32 serial,
         canvas = scene_picture (surface, format);
         if (canvas)
         {
+            uint32_t options = PresentOptionCopy;
+
+            if (surface->tearing_async)
+                options |= PresentOptionAsyncMayTear;
             /* Present keeps its own reference for the lifetime of the copy. */
             error = present_pixmap (window, (PixmapPtr)canvas->pDrawable,
                                     serial, NULL, NULL, 0, 0, NULL, NULL, NULL,
 #ifdef DRI3
                                     NULL, NULL, 0, 0,
 #endif
-                                    PresentOptionCopy, 0, 0, 0, NULL, 0);
+                                    options, 0, 0, 0, NULL, 0);
             FreePicture (canvas, None);
             if (error == Success)
             {
