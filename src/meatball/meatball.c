@@ -121,6 +121,9 @@ fail:
     return MEATBALL_FALSE;
 }
 
+_MEATBALL_BOOL
+meatball_running (void) { return compositor.wl_display != NULL; }
+
 void
 meatball_shutdown (void)
 {

@@ -119,7 +119,11 @@ disabled for that host.
 Load the `sauce` extension module in Spaghetti's `Module` section. Its
 `SocketPath` option accepts an absolute Unix socket path; by default it uses
 `$XDG_RUNTIME_DIR/wayland-meatball-<X display>`. `SocketMode` accepts octal
-permissions and defaults to `0600`. The parent directory must already exist.
+permissions and defaults to `0600`. Sauce waits for the configured parent
+directory to exist before starting Meatball. If the native bridge closes
+or the socket pathname disappears, Sauce restarts Meatball in the current
+X server generation once the directory is available again. Wayland clients
+must reconnect after a restart.
 When running as root, the module assigns the socket to that directory's owner
 and group. Clients select the absolute path through `WAYLAND_DISPLAY`.
 
@@ -403,7 +407,8 @@ Every check runs against the isolated module test host.
 - `native-sdk` loads a probe for the required server exports and checks an X11
   client connection.
 - `native-lifecycle` loads the actual module and checks resets, socket
-  cleanup, failed startup, and conflicting listeners.
+  cleanup, late and recreated runtime directories, recovery after native
+  bridge closure, failed startup, and conflicting listeners.
 - `native-loop` checks Wayland round trips alongside X11 traffic and a client
   that leaves replies unread.
 - `native-scheduler` exercises Wayland idle handlers, timers, pipe reads,

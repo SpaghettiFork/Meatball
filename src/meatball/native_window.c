@@ -27,6 +27,8 @@ window_deleted (void *data, XID id)
 Bool
 mb_windows_initialize (void)
 {
+    static unsigned long tracker_generation;
+    static RESTYPE tracker_type;
     struct
     {
         const char *name;
@@ -51,10 +53,15 @@ mb_windows_initialize (void)
     };
     unsigned int i;
 
-    compositor.window_type =
-        CreateNewResourceType (window_deleted, WINDOW_TRACKER_NAME);
-    if (!compositor.window_type)
-        return FALSE;
+    if (tracker_generation != serverGeneration || !tracker_type)
+    {
+        tracker_type =
+            CreateNewResourceType (window_deleted, WINDOW_TRACKER_NAME);
+        if (!tracker_type)
+            return FALSE;
+        tracker_generation = serverGeneration;
+    }
+    compositor.window_type = tracker_type;
     for (i = 0; i < ARRAY_SIZE (atoms); i++)
     {
         *atoms[i].atom =
