@@ -10,7 +10,8 @@
 static PicturePtr
 surface_picture (MbSurface *surface)
 {
-    PixmapPtr pixels;
+    MbBuffer *buffer = surface->content->buffer;
+    PixmapPtr pixels = buffer->imported;
     PicturePtr source;
     PictFormatPtr source_format;
     pixman_f_transform_t sampling = {
@@ -24,13 +25,12 @@ surface_picture (MbSurface *surface)
                    surface->transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
     int error;
 
-    if (dixLookupResourceByType ((void **)&pixels, surface->content->pixels,
-                                 RT_PIXMAP, surface->client->native,
-                                 DixReadAccess) != Success)
+    if (!pixels && dixLookupResourceByType (
+                       (void **)&pixels, surface->content->pixels, RT_PIXMAP,
+                       surface->client->native, DixReadAccess) != Success)
         return NULL;
-    source_format =
-        PictureMatchFormat (surface->window.screen, pixels->drawable.depth,
-                            surface->content->buffer->render_format);
+    source_format = PictureMatchFormat (
+        surface->window.screen, pixels->drawable.depth, buffer->render_format);
     if (!source_format)
         return NULL;
     source = CreatePicture (FakeClientID (surface->client->native->index),
@@ -105,6 +105,12 @@ surface_picture (MbSurface *surface)
         sampling.m[1][0] = -scale_x;
         sampling.m[1][2] = height - x;
         break;
+    }
+    if (buffer->y_invert)
+    {
+        sampling.m[1][0] = -sampling.m[1][0];
+        sampling.m[1][1] = -sampling.m[1][1];
+        sampling.m[1][2] = height - sampling.m[1][2];
     }
     if (!pixman_transform_from_pixman_f_transform (&transform, &sampling) ||
         SetPictureTransform (source, &transform) != Success)

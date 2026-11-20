@@ -52,7 +52,7 @@ def connect_x11(display, return_setup=False):
 
 
 @contextmanager
-def server(host, module, environment=None, arguments=()):
+def server(host, module, environment=None, arguments=(), pass_fds=()):
     read_fd, write_fd = os.pipe()
     child_environment = {**os.environ,
                          "MEATBALL_TEST_MODULE": str(Path(module).resolve())}
@@ -68,7 +68,7 @@ def server(host, module, environment=None, arguments=()):
                  "-nolisten", "tcp", "-ac", "-noreset", "-screen", "0",
                  f"{ROOT_WIDTH}x{ROOT_HEIGHT}x{SCREEN_DEPTH}", *arguments],
                 env=child_environment,
-                pass_fds=[write_fd], stdout=log, stderr=log,
+                pass_fds=(write_fd, *pass_fds), stdout=log, stderr=log,
             )
         finally:
             os.close(write_fd)

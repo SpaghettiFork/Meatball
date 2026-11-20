@@ -6,7 +6,6 @@
 #include <pixmapstr.h>
 #include <servermd.h>
 #include <stdlib.h>
-#include <string.h>
 #include <wayland-server-protocol.h>
 
 #define MB_ALL_PLANES (~0UL)
@@ -86,7 +85,7 @@ mb_pixmap_upload (ScreenPtr screen, unsigned int width, unsigned int height,
 }
 
 PixmapPtr
-mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert)
+mb_pixmap_snapshot (PixmapPtr imported)
 {
     ScreenPtr screen = imported->drawable.pScreen;
     unsigned int depth = imported->drawable.depth;
@@ -99,25 +98,11 @@ mb_pixmap_snapshot (PixmapPtr imported, Bool y_invert)
 
     if (size > MB_MAX_SNAPSHOT_BYTES)
         return NULL;
-    pixels = malloc (size + (y_invert ? stride : 0));
+    pixels = malloc (size);
     if (!pixels)
         return NULL;
     screen->GetImage (&imported->drawable, 0, 0, width, height, ZPixmap,
                       MB_ALL_PLANES, pixels);
-    if (y_invert)
-    {
-        char *scratch = pixels + size;
-
-        for (unsigned int y = 0; y < height / 2; y++)
-        {
-            char *top = pixels + y * stride;
-            char *bottom = pixels + (height - y - 1) * stride;
-
-            memcpy (scratch, top, stride);
-            memcpy (top, bottom, stride);
-            memcpy (bottom, scratch, stride);
-        }
-    }
     copy = mb_pixmap_upload (screen, width, height, depth, pixels);
     free (pixels);
     return copy;
