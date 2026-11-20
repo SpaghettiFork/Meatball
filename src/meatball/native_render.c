@@ -4,6 +4,7 @@
 
 #include <picturestr.h>
 #include <pixmapstr.h>
+#include <present.h>
 #include <wayland-server-protocol.h>
 
 static PicturePtr
@@ -116,12 +117,11 @@ surface_picture (MbSurface *surface)
     return source;
 }
 
-PicturePtr
-mb_scene_picture (MbSurface *surface)
+static PicturePtr
+scene_picture (MbSurface *surface, PictFormatPtr format)
 {
     PicturePtr canvas = NULL;
     PixmapPtr pixels;
-    PictFormatPtr format;
     MbSceneIterator iterator = { .root = surface, .surface = surface };
     MbSurface *node;
     xRenderColor clear = { 0 };
@@ -129,13 +129,11 @@ mb_scene_picture (MbSurface *surface)
                              surface->scene_height };
     int error;
 
-    format = PictureMatchFormat (surface->window.screen, MB_SHM_ARGB_DEPTH,
-                                 PICT_a8r8g8b8);
     if (!format || !surface->pixels)
         return NULL;
     pixels = surface->window.screen->CreatePixmap (
         surface->window.screen, surface->scene_width, surface->scene_height,
-        MB_SHM_ARGB_DEPTH, 0);
+        format->depth, 0);
     if (!pixels)
         return NULL;
     canvas = CreatePicture (FakeClientID (surface->client->native->index),
@@ -165,20 +163,52 @@ fail:
     return NULL;
 }
 
-Bool
-mb_surface_redraw (MbSurface *surface)
+PicturePtr
+mb_scene_picture (MbSurface *surface)
 {
-    WindowPtr window = mb_window_get (&surface->window, DixWriteAccess);
+    PictFormatPtr format = PictureMatchFormat (
+        surface->window.screen, MB_SHM_ARGB_DEPTH, PICT_a8r8g8b8);
+
+    return scene_picture (surface, format);
+}
+
+Bool
+mb_surface_redraw (MbSurface *surface, WindowPtr window, CARD32 serial,
+                   Bool *submitted)
+{
     PicturePtr destination = NULL, canvas;
     PictFormatPtr format;
     int error;
 
-    if (!window || !window->realized || !surface->pixels)
+    *submitted = FALSE;
+    if (!window->realized || !surface->pixels)
         return TRUE;
+    format = PictureWindowFormat (window);
+    if (serial && format && window->drawable.width == surface->scene_width &&
+        window->drawable.height == surface->scene_height)
+    {
+        canvas = scene_picture (surface, format);
+        if (canvas)
+        {
+            /* Present keeps its own reference for the lifetime of the copy. */
+            error = present_pixmap (window, (PixmapPtr)canvas->pDrawable,
+                                    serial, NULL, NULL, 0, 0, NULL, NULL, NULL,
+#ifdef DRI3
+                                    NULL, NULL, 0, 0,
+#endif
+                                    PresentOptionCopy, 0, 0, 0, NULL, 0);
+            FreePicture (canvas, None);
+            if (error == Success)
+            {
+                *submitted = TRUE;
+                return TRUE;
+            }
+        }
+    }
+
     canvas = mb_scene_picture (surface);
     if (!canvas)
         return FALSE;
-    format = PictureWindowFormat (window);
     if (format)
         destination = CreatePicture (
             FakeClientID (surface->client->native->index), &window->drawable,

@@ -202,12 +202,15 @@ including children outside the parent's buffer. The canvas is limited to
 SHM pixels are copied when committed, and frame callbacks wait until the
 corresponding surface state is visible in a mapped tree.
 
-Mapped native windows request X11 Present NotifyMSC after drawing. Frame
-callbacks for each batch use the matching refresh timestamp, and commits
-arriving during that wait join a later batch. Cursor images and windows without
-usable Present timing use a 16 ms timer. A window falls back to the timer if a
-refresh notification stalls for 1.5 seconds. Scene pixels are still drawn to
-the native window with Render.
+Mapped toplevels with frame callbacks render the scene into a pixmap at the
+native window's depth and submit it with X11 Present in copy mode. One
+submission per window may be pending. Commits arriving during the wait are
+drawn in the next batch, and callbacks use the matching completion timestamp.
+Updates without frame callbacks and updates during native size mismatches use
+direct Render drawing. Where Present timing is available, direct drawing with
+frame callbacks uses NotifyMSC. Cursor images and windows without usable
+Present timing use a 16 ms timer. A window falls back to direct drawing and
+the timer if a Present completion stalls for 1.5 seconds.
 
 ### Input
 
@@ -294,7 +297,6 @@ Xdnd versions 1 and 2 are not implemented.
 
 ## Still to port
 
-- Present pixmap submission. Frame pacing already uses Present NotifyMSC.
 - DRI3 buffers.
 - Popups.
 - Settings.
@@ -328,8 +330,9 @@ Every check runs against the isolated module test host.
 - `native-xdg` checks mapped pixel content, a test X11 window manager, configure
   serials, WM messages and properties, size hints, parent inheritance, protocol
   errors, remapping, and resets.
-- `native-present` compares Wayland frame callback timestamps to X11 Present
-  completion events and checks that later commits wait for a separate refresh.
+- `native-present` checks copied pixels and matches Wayland frame callback
+  timestamps to X11 Present pixmap completion events. Later commits wait for
+  a separate refresh.
 - `native-transforms` checks all buffer orientations, integer scales, committed
   geometry, retained pixels after release, and invalid surface state.
 - `native-viewport` checks cropped pixels across buffer orientations and scales,

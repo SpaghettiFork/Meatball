@@ -73,7 +73,7 @@ mb_surface_commit_free (MbSurfaceCommit *commit)
     free (commit);
 }
 
-static Bool schedule_frames (MbSurface *surface, WindowPtr window);
+static Bool draw_frame (MbSurface *surface, WindowPtr window);
 
 static void
 complete_frames (MbSurface *surface, CARD32 time)
@@ -85,7 +85,7 @@ complete_frames (MbSurface *surface, CARD32 time)
     CARD32 serial = surface->frame_serial;
 
     surface->frame_serial = 0;
-    surface->present_pending = FALSE;
+
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
         !surface->pixels || mb_subsurface_root (surface) != surface)
         return;
@@ -99,7 +99,7 @@ complete_frames (MbSurface *surface, CARD32 time)
             wl_resource_destroy (frame->resource);
         }
     }
-    if (!schedule_frames (surface, window))
+    if (surface->present_redraw && !draw_frame (surface, window))
         wl_resource_post_no_memory (surface->resource);
 }
 
@@ -108,22 +108,36 @@ frame_ready (void *data)
 {
     MbSurface *surface = data;
 
-    if (surface->present_pending)
+    if (!surface->frame_serial)
+        return 0;
+    if (surface->present_serial == surface->frame_serial)
+    {
         surface->present_disabled = TRUE;
+        if (surface->present_kind == PresentCompleteKindPixmap)
+            surface->present_redraw = TRUE;
+    }
     complete_frames (surface, GetTimeInMillis ());
     return 0;
 }
 
 static Bool
-schedule_frames (MbSurface *surface, WindowPtr window)
+draw_frame (MbSurface *surface, WindowPtr window)
 {
     MbSceneIterator iterator = { .root = surface, .surface = surface };
     MbSurface *node;
     ExtensionEntry *present;
     CARD32 serial = 0;
+    Bool submitted;
 
     if (surface->frame_serial)
-        return TRUE;
+    {
+        surface->present_redraw = TRUE;
+        if (surface->present_serial == surface->frame_serial &&
+            surface->present_kind == PresentCompleteKindPixmap)
+            return TRUE;
+        return mb_surface_redraw (surface, window, 0, &submitted);
+    }
+    surface->present_redraw = FALSE;
     while ((node = mb_scene_next (&iterator)))
     {
         struct Frame *frame;
@@ -140,7 +154,7 @@ schedule_frames (MbSurface *surface, WindowPtr window)
         }
     }
     if (!serial)
-        return TRUE;
+        return mb_surface_redraw (surface, window, 0, &submitted);
     if (!surface->frame_timer)
         surface->frame_timer = wl_event_loop_add_timer (
             compositor.wl_event_loop, frame_ready, surface);
@@ -166,17 +180,33 @@ schedule_frames (MbSurface *surface, WindowPtr window)
         else
             surface->present_disabled = TRUE;
     }
-    if (!surface->present_disabled && present && surface->present_event)
+    Bool use_present =
+        present && !surface->present_disabled && surface->present_event;
+
+    if (!mb_surface_redraw (
+            surface, window,
+            use_present && surface->role == MB_ROLE_XDG ? serial : 0,
+            &submitted))
+        return FALSE;
+    if (submitted)
+    {
+        surface->present_serial = serial;
+        surface->present_kind = PresentCompleteKindPixmap;
+    }
+    else if (use_present)
     {
         /* With a divisor of one, NotifyMSC targets the next refresh. */
         if (present_notify_msc (window, serial, 0, PRESENT_EVERY_REFRESH, 0) ==
             Success)
-            surface->present_pending = TRUE;
+        {
+            surface->present_serial = serial;
+            surface->present_kind = PresentCompleteKindNotifyMSC;
+        }
         else
             surface->present_disabled = TRUE;
     }
     return wl_event_source_timer_update (surface->frame_timer,
-                                         surface->present_pending
+                                         surface->present_serial == serial
                                              ? PRESENT_TIMEOUT_MS
                                              : FRAME_DELAY_MS) == 0;
 }
@@ -193,7 +223,7 @@ redraw (MbSurface *surface)
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
         !surface->pixels)
         return TRUE;
-    return mb_surface_redraw (surface) && schedule_frames (surface, window);
+    return draw_frame (surface, window);
 }
 
 static void
@@ -207,20 +237,30 @@ surface_output (MbClient *client, const void *message, size_t size)
     {
         const xPresentCompleteNotify *complete = message;
 
-        if (complete->evtype != PresentCompleteNotify ||
-            complete->kind != PresentCompleteKindNotifyMSC)
+        if (complete->evtype != PresentCompleteNotify)
             return;
         wl_list_for_each (surface, &compositor.surfaces, link)
         {
-            if (surface->client == client && surface->present_pending &&
+            if (surface->client == client && surface->present_serial &&
                 surface->window.id == complete->window &&
                 surface->present_opcode == complete->extension &&
                 surface->present_event == complete->eid &&
-                surface->frame_serial == complete->serial)
+                surface->present_serial == complete->serial &&
+                surface->present_kind == complete->kind)
             {
-                wl_event_source_timer_update (surface->frame_timer, 0);
-                complete_frames (surface,
-                                 complete->ust / MICROSECONDS_PER_MILLISECOND);
+                surface->present_serial = 0;
+                if (surface->frame_serial == complete->serial)
+                {
+                    wl_event_source_timer_update (surface->frame_timer, 0);
+                    complete_frames (
+                        surface, complete->ust / MICROSECONDS_PER_MILLISECOND);
+                }
+                else if (complete->kind == PresentCompleteKindPixmap &&
+                         !redraw (surface))
+                {
+                    /* A stalled copy can complete after timer fallback. */
+                    wl_resource_post_no_memory (surface->resource);
+                }
                 return;
             }
         }
