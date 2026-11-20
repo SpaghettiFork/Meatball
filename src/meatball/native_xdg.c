@@ -1214,6 +1214,13 @@ mb_xdg_constrain_scene (MbSurface *surface, pixman_box32_t *bounds,
         {
             if (node == surface)
                 continue;
+            /* A frame shadow can surround the content on all sides
+             * and still take input in its resize margins. */
+            if (node->buffer->render_format == PICT_a8r8g8b8 &&
+                iterator.x < 0 && iterator.y < 0 &&
+                iterator.x + node->width > surface->width &&
+                iterator.y + node->height > surface->height)
+                continue;
             /* Clip overlapping decorations without hiding separate
              * subsurfaces painted entirely outside the window geometry. */
             if (!node->input_default &&
