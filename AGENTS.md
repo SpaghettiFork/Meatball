@@ -279,7 +279,10 @@ its root surface.
 
 Version 5 `wl_seat` exposes each enabled Xorg master pointer/keyboard pair.
 Pointer events follow committed surface-tree stacking and input regions, with
-implicit button grabs and wheel scrolling. Keyboard events follow native X11
+implicit button grabs and scrolling. XI2 touchpad valuators preserve
+fractional scroll deltas and send both axes together as continuous motion.
+Meatball omits the corresponding emulated wheel buttons. Discrete wheel
+buttons use the existing wheel events. Keyboard events follow native X11
 focus, with the server's current XKB keymap, modifiers, held keys, and repeat
 settings. Keymap changes and master-device hotplug update existing clients.
 
@@ -456,6 +459,8 @@ Every check runs against the isolated module test host.
 - `native-input` injects XTEST pointer and keyboard events, exercises focus and
   implicit grabs, and checks modifiers, repeat controls, client isolation,
   subsurface destruction, and master-device hotplug.
+- `native-scroll` sends XI2 touchpad valuators and checks fractional deltas,
+  diagonal scroll frames, emulated button suppression, and discrete wheels.
 - `native-constraints` checks X11 cursor positions, lock motion suppression,
   button delivery, nonrectangular and double-buffered regions, synchronized
   subsurface commits, focus and lifetime rules, duplicate requests, window

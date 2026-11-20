@@ -4,12 +4,14 @@
 #include "relative-pointer.h"
 #include "server.h"
 
+#include <X11/extensions/XI.h>
 #include <X11/extensions/XI2.h>
 #include <X11/extensions/XI2proto.h>
 #include <X11/extensions/shapeconst.h>
 #include <exevents.h>
 #include <extnsionst.h>
 #include <inputstr.h>
+#include <limits.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
 #include <regionstr.h>
@@ -39,6 +41,8 @@
 #define X11_MIDDLE_BUTTON 2
 #define X11_RIGHT_BUTTON 3
 #define SCROLL_STEP 10
+#define SCROLL_AXIS_COUNT 2
+#define FIXED_32_ONE 4294967296.0
 #define FIXED_16_ONE 65536.0
 #define MILLISECONDS_PER_SECOND 1000
 #define MICROSECONDS_PER_MILLISECOND 1000
@@ -67,6 +71,15 @@ struct RelativeMotion
     uint64_t time;
     wl_fixed_t dx, dy, dx_unaccel, dy_unaccel;
     int grab_client;
+};
+
+struct ScrollSample
+{
+    uint32_t time;
+    int source;
+    int axis[SCROLL_AXIS_COUNT];
+    double position[SCROLL_AXIS_COUNT], increment[SCROLL_AXIS_COUNT];
+    unsigned int delivered;
 };
 
 struct Modifiers
@@ -130,6 +143,7 @@ struct MbSeat
     unsigned char keys[DOWN_LENGTH], buttons[DOWN_LENGTH];
     unsigned int button_count, grab_button;
     unsigned int relative_pointers;
+    struct ScrollSample scroll;
     wl_fixed_t pointer_x, pointer_y;
     int32_t root_x, root_y;
     double root_pointer_x, root_pointer_y;
@@ -158,6 +172,7 @@ struct InputEvent
     XID target_window, native_window;
     int target_screen;
     Bool redirected_pointer;
+    wl_fixed_t scroll_delta[SCROLL_AXIS_COUNT];
     size_t size, charge;
     unsigned char keys[DOWN_LENGTH];
     struct Modifiers modifiers;
@@ -173,10 +188,13 @@ struct MbInput
     struct wl_list seats, events;
     size_t queued;
     int xi_opcode;
+    Atom touchpad_type;
     Bool callback_registered, relative_motion_registered;
 };
 
 static uint64_t next_seat_lifetime;
+
+static wl_fixed_t input_fixed (double value);
 
 static MbSurface *root_for_window (WindowPtr);
 static void pointer_focus (struct MbSeat *, MbSurface *, wl_fixed_t,
@@ -1288,6 +1306,93 @@ mb_input_observe_write (MbClient *client, const void *data, size_t size)
 }
 
 static void
+track_scroll_sample (struct MbSeat *seat, ClientPtr client,
+                     const xXIRawEvent *event, size_t size)
+{
+    struct ScrollSample *sample = &seat->scroll;
+    const unsigned char *mask = (const unsigned char *)(event + 1);
+    size_t mask_bytes = event->valuators_len * sizeof (CARD32);
+    DeviceIntPtr source;
+    ValuatorClassPtr valuators;
+
+    sample->source = 0;
+    sample->delivered = 0;
+    if (mask_bytes > size - sizeof (*event) ||
+        (event->flags & XIPointerEmulated) ||
+        dixLookupDevice (&source, event->sourceid, client, DixGetAttrAccess) !=
+            Success ||
+        source->xinput_type != compositor.input->touchpad_type)
+        return;
+    valuators = source->valuator;
+    if (!valuators)
+        return;
+
+    sample->time = event->time;
+    sample->axis[WL_POINTER_AXIS_VERTICAL_SCROLL] = valuators->v_scroll_axis;
+    sample->axis[WL_POINTER_AXIS_HORIZONTAL_SCROLL] = valuators->h_scroll_axis;
+    for (unsigned int i = 0; i < SCROLL_AXIS_COUNT; i++)
+    {
+        int axis = sample->axis[i];
+
+        if (axis < 0 || axis >= valuators->numAxes ||
+            (size_t)axis >= mask_bytes * CHAR_BIT ||
+            !XIMaskIsSet (mask, axis) ||
+            !valuators->axes[axis].scroll.increment)
+        {
+            sample->axis[i] = -1;
+            continue;
+        }
+        /* Raw delivery precedes the update of the source's XI2 position. */
+        sample->source = event->sourceid;
+        sample->position[i] = valuators->axisVal[axis];
+        sample->increment[i] = valuators->axes[axis].scroll.increment;
+    }
+}
+
+static void
+capture_scroll (struct MbSeat *seat, const xXIDeviceEvent *motion,
+                struct InputEvent *event)
+{
+    struct ScrollSample *sample = &seat->scroll;
+    size_t buttons = motion->buttons_len * sizeof (CARD32);
+    size_t mask_bytes = motion->valuators_len * sizeof (CARD32);
+    const unsigned char *mask;
+    size_t payload = event->size - sizeof (*motion);
+    size_t value = 0;
+
+    if (motion->sourceid != sample->source || motion->time != sample->time ||
+        sample->delivered || buttons + mask_bytes > payload)
+        return;
+    mask = (const unsigned char *)(motion + 1) + buttons;
+    payload -= buttons + mask_bytes;
+    for (size_t axis = 0; axis < mask_bytes * CHAR_BIT && axis < MAX_VALUATORS;
+         axis++)
+    {
+        FP3232 position;
+
+        if (!XIMaskIsSet (mask, axis))
+            continue;
+        if (value >= payload / sizeof (position))
+            break;
+        memcpy (&position, mask + mask_bytes + value++ * sizeof (position),
+                sizeof (position));
+        for (unsigned int i = 0; i < SCROLL_AXIS_COUNT; i++)
+        {
+            if (sample->axis[i] != (int)axis)
+                continue;
+            double current =
+                position.integral + (double)position.frac / FIXED_32_ONE;
+            double delta = (current - sample->position[i]) /
+                           sample->increment[i] * SCROLL_STEP;
+
+            event->scroll_delta[i] = input_fixed (delta);
+            if (event->scroll_delta[i])
+                sample->delivered |= 1U << i;
+        }
+    }
+}
+
+static void
 native_event (CallbackListPtr *callbacks, void *closure, void *data)
 {
     EventInfoRec *info = data;
@@ -1333,6 +1438,13 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
     seat = find_seat (generic->deviceid);
     if (!seat)
         return;
+    if (generic->evtype == XI_RawMotion && size >= sizeof (xXIRawEvent))
+    {
+        if (client == compositor.bridge_client)
+            track_scroll_sample (seat, client->native, (const void *)generic,
+                                 size);
+        return;
+    }
     if (generic->evtype == XI_DeviceChanged)
     {
         DeviceIntPtr keyboard;
@@ -1350,6 +1462,26 @@ native_event (CallbackListPtr *callbacks, void *closure, void *data)
     if (!event)
         return;
     memcpy (event->data, generic, size);
+    if (generic->evtype == XI_Motion && size >= sizeof (xXIDeviceEvent))
+        capture_scroll (seat, (const void *)generic, event);
+    if (generic->evtype == XI_ButtonPress && size >= sizeof (xXIDeviceEvent))
+    {
+        const xXIDeviceEvent *button = (const void *)generic;
+        unsigned int axis = button->detail <= X11_SCROLL_DOWN
+                                ? WL_POINTER_AXIS_VERTICAL_SCROLL
+                                : WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+
+        if (button->detail >= X11_SCROLL_UP &&
+            button->detail <= X11_SCROLL_RIGHT &&
+            (button->flags & XIPointerEmulated) &&
+            button->sourceid == seat->scroll.source &&
+            button->time == seat->scroll.time &&
+            (seat->scroll.delivered & (1U << axis)))
+        {
+            free_event (event);
+            return;
+        }
+    }
     if ((seat->drag_owner == client->lifetime ||
          (seat->popup_grab && seat->popup_grab->client == client)) &&
         generic->evtype >= XI_ButtonPress && generic->evtype <= XI_Motion)
@@ -1418,7 +1550,7 @@ retire_seat (struct MbSeat *seat)
 }
 
 static wl_fixed_t
-relative_delta (double value)
+input_fixed (double value)
 {
     const double scale = wl_fixed_from_int (1);
 
@@ -1462,10 +1594,10 @@ native_relative_motion (CallbackListPtr *callbacks, void *closure, void *data)
     offset_ms = (int32_t)(motion->time - (uint32_t)now_ms);
     struct RelativeMotion relative = {
         .time = (now_ms + offset_ms) * MICROSECONDS_PER_MILLISECOND,
-        .dx = relative_delta (motion->dx),
-        .dy = relative_delta (motion->dy),
-        .dx_unaccel = relative_delta (motion->dx_unaccel),
-        .dy_unaccel = relative_delta (motion->dy_unaccel),
+        .dx = input_fixed (motion->dx),
+        .dy = input_fixed (motion->dy),
+        .dx_unaccel = input_fixed (motion->dx_unaccel),
+        .dy_unaccel = input_fixed (motion->dy_unaccel),
         .grab_client = grab ? CLIENT_ID (grab->resource) : 0,
     };
 
@@ -2234,6 +2366,32 @@ pointer_button (struct MbSeat *seat, unsigned int detail, Bool pressed,
 }
 
 static void
+pointer_scroll (struct MbSeat *seat, const wl_fixed_t *deltas, uint32_t time)
+{
+    struct InputResource *input;
+
+    if (!seat->pointer_focus)
+        return;
+    wl_list_for_each (input, &seat->resources, link)
+    {
+        if (input->kind != RESOURCE_POINTER || input->client->failed ||
+            input->client != seat->pointer_focus->client)
+            continue;
+        if (wl_resource_get_version (input->resource) >=
+            WL_POINTER_AXIS_SOURCE_SINCE_VERSION)
+            wl_pointer_send_axis_source (input->resource,
+                                         WL_POINTER_AXIS_SOURCE_CONTINUOUS);
+        for (uint32_t axis = 0; axis < SCROLL_AXIS_COUNT; axis++)
+        {
+            if (deltas[axis])
+                wl_pointer_send_axis (input->resource, time, axis,
+                                      deltas[axis]);
+        }
+        send_pointer_frame (input);
+    }
+}
+
+static void
 keyboard_key (struct MbSeat *seat, const xXIDeviceEvent *event)
 {
     struct InputResource *input;
@@ -2331,6 +2489,8 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
     if (queued->size >= sizeof (xXIDeviceEvent))
     {
         const xXIDeviceEvent *event = (const void *)generic;
+        Bool scroll = queued->scroll_delta[WL_POINTER_AXIS_VERTICAL_SCROLL] ||
+                      queued->scroll_delta[WL_POINTER_AXIS_HORIZONTAL_SCROLL];
 
         if (seat->drag_owner && event->evtype >= XI_ButtonPress &&
             event->evtype <= XI_Motion)
@@ -2409,16 +2569,19 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
             seat->pointer_root = window && window->realized ? root : NULL;
             seat->root_pointer_x = (double)event->root_x / FIXED_16_ONE;
             seat->root_pointer_y = (double)event->root_y / FIXED_16_ONE;
-            pointer_motion (seat, seat->pointer_root,
-                            window ? seat->root_pointer_x -
-                                         window->drawable.x + root->scene_x
-                                   : 0,
-                            window ? seat->root_pointer_y -
-                                         window->drawable.y + root->scene_y
-                                   : 0,
-                            event->time, event->evtype == XI_Motion);
-            if (event->evtype == XI_ButtonPress ||
-                event->evtype == XI_ButtonRelease)
+            pointer_motion (
+                seat, seat->pointer_root,
+                window
+                    ? seat->root_pointer_x - window->drawable.x + root->scene_x
+                    : 0,
+                window
+                    ? seat->root_pointer_y - window->drawable.y + root->scene_y
+                    : 0,
+                event->time, event->evtype == XI_Motion && !scroll);
+            if (scroll)
+                pointer_scroll (seat, queued->scroll_delta, event->time);
+            else if (event->evtype == XI_ButtonPress ||
+                     event->evtype == XI_ButtonRelease)
                 pointer_button (seat, event->detail,
                                 event->evtype == XI_ButtonPress, event->time);
             return;
@@ -2440,9 +2603,11 @@ dispatch_xi (struct MbSeat *seat, struct InputEvent *queued)
         pointer_motion (seat, root,
                         (double)event->event_x / FIXED_16_ONE + root->scene_x,
                         (double)event->event_y / FIXED_16_ONE + root->scene_y,
-                        event->time, event->evtype == XI_Motion);
-        if (event->evtype == XI_ButtonPress ||
-            event->evtype == XI_ButtonRelease)
+                        event->time, event->evtype == XI_Motion && !scroll);
+        if (scroll)
+            pointer_scroll (seat, queued->scroll_delta, event->time);
+        else if (event->evtype == XI_ButtonPress ||
+                 event->evtype == XI_ButtonRelease)
             pointer_button (seat, event->detail,
                             event->evtype == XI_ButtonPress, event->time);
     }
@@ -2706,6 +2871,7 @@ mb_input_initialize (void)
     wl_list_init (&input->seats);
     wl_list_init (&input->events);
     input->xi_opcode = extension->base;
+    input->touchpad_type = MakeAtom (XI_TOUCHPAD, strlen (XI_TOUCHPAD), TRUE);
     compositor.input = input;
     input->constraints_global = wl_global_create (
         compositor.wl_display, &zwp_pointer_constraints_v1_interface,
@@ -2732,6 +2898,8 @@ mb_input_initialize (void)
     for (screen = 0; screen < screenInfo.numScreens; screen++)
     {
         WindowPtr root;
+        DeviceIntRec all_masters = { .id = XIAllMasterDevices };
+        unsigned char raw[XIMaskLen (XI_RawMotion)] = { 0 };
 
         if (dixLookupWindow (&root,
                              screenInfo.screens[screen]->root->drawable.id,
@@ -2740,6 +2908,12 @@ mb_input_initialize (void)
             XISetEventMask (&all_devices, root,
                             compositor.bridge_client->native, sizeof (mask),
                             mask) != Success)
+            goto fail;
+        /* XI2 delivers raw motion on every root. Select it on just one. */
+        XISetMask (raw, XI_RawMotion);
+        if (screen == 0 && XISetEventMask (&all_masters, root,
+                                           compositor.bridge_client->native,
+                                           sizeof (raw), raw) != Success)
             goto fail;
     }
     reconcile_seats ();
