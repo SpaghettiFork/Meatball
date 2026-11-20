@@ -175,14 +175,17 @@ SHM additionally advertises RGB565 and XRGB1555 when the first X screen has
 the corresponding Render formats. Packed 16-bit rows are copied into
 X-aligned pixmaps before drawing.
 
-Version 3 of `zwp_linux_dmabuf_v1` is available when the first X screen reports
-DRI3 modifiers for XRGB8888, ARGB8888, or RGB565. Meatball advertises those
-format and modifier pairs and uses DRI3 to import the planes for both buffer
-creation requests. XRGB1555 DMA-BUF needs exact format discovery and import
-support in Spaghetti. Progressive buffers support Y inversion. Commits take a CPU
+The `zwp_linux_dmabuf_v1` global is available when the first X screen reports
+DRI3 modifiers for XRGB8888, ARGB8888, or RGB565. Version 4 supplies default and
+per-surface feedback when DRI3 opens a device for that screen. The feedback
+contains the device number and a sealed format table in a single tranche for
+compositing. If the device is unavailable, the global stays at version 3.
+An asynchronous DRI3 reply can advertise version 4 for new bindings.
+Meatball uses DRI3 to import the planes for both buffer creation requests.
+XRGB1555 DMA-BUF needs exact format discovery and import support in Spaghetti.
+Progressive buffers support Y inversion. Commits take a CPU
 readback into a server-owned pixmap before releasing the client buffer, so
 the client can reuse its storage while the window retains its pixels.
-The current version does not provide device feedback or zero-copy rendering.
 
 ### Toplevels
 
@@ -313,7 +316,7 @@ Xdnd versions 1 and 2 are not implemented.
 
 ## Still to port
 
-- DMA-BUF device feedback and additional formats.
+- Additional DMA-BUF formats.
 - Popups.
 - Settings.
 - Leases.
@@ -343,8 +346,10 @@ Every check runs against the isolated module test host.
   buffer release, pixel readback, and redraws after the client reuses its storage.
 - `native-dmabuf` checks modifier advertisements, both buffer creation
   requests, rejected parameters, buffer release and reuse, Y inversion, and
-  the absence of the global without DRI3. A test-only Xvfb DRI3 driver imports
-  guarded memory-backed pixmaps, so this check does not require a GPU.
+  the absence of the global without DRI3. It also checks default and per-surface
+  feedback, sealed format tables, asynchronous device discovery, and version 3
+  fallback. The Xvfb driver uses guarded memory-backed pixmaps and a test
+  device, so this check does not require a GPU.
 - `native-shm-fault` truncates an imported file during rendering to exercise
   Spaghetti's SIGBUS handling.
 - `native-xdg` checks mapped pixel content, a test X11 window manager, configure

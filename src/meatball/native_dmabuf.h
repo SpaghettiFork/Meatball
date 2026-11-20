@@ -7,5 +7,7 @@
 struct MbDmabuf;
 extern Bool mb_dmabuf_initialize (void);
 extern void mb_dmabuf_shutdown (void);
+extern Bool mb_dmabuf_dri3_reply (MbClient *client, const void *message,
+                                  size_t size);
 
 #endif
