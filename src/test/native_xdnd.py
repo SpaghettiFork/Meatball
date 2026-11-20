@@ -9,12 +9,12 @@ import tempfile
 
 from host_support import connect_x11, server
 from native_data import (mapped, focus, receive_pipe, MIME_TEXT, MIME_BINARY,
-                         PAYLOAD, SOURCE_CANCELLED)
-from native_drag import (start, accept, ENTER, DROP, LEAVE, SOURCE_ACTION,
+                         PAYLOAD, SOURCE_CANCELLED, SOURCE_ACTIONS)
+from native_drag import (start, accept, press, ENTER, DROP, LEAVE, SOURCE_ACTION,
                          SOURCE_FINISHED, SOURCE_DROP, OFFER_FINISH,
-                         OFFER_ACTIONS, COPY, MOVE, ASK, POINT_INSET,
-                         SOURCE_POINT, TARGET_POINT, LEFT_BUTTON)
-from native_input import XInput, MOTION, BUTTON_RELEASE, POINTER_ENTER
+                         OFFER_ACTIONS, COPY, MOVE, ASK, ACTIONS, POINT_INSET,
+                         SOURCE_POINT, TARGET_POINT, LEFT_BUTTON, DEVICE_DRAG)
+from native_input import XInput, MOTION, BUTTON_RELEASE, POINTER_ENTER, POINTER_LEAVE
 from native_lifecycle import wait_socket
 from native_selections import (XSelections, XA_ATOM, pipe_result,
                                 STRUCTURE_NOTIFY_MASK, PROPERTY_CHANGE_MASK)
@@ -119,9 +119,19 @@ def check_export(path, display, version=XDND_VERSION, action=COPY, proxy=False,
         actor.fake(MOTION, x=SOURCE_POINT, y=SOURCE_POINT)
         sender.until(sender.pointer, POINTER_ENTER)
         source = sender.source((MIME_TEXT, MIME_BINARY, *EXTRA_MIMES))
-        start(sender, actor, source=source)
+        sender.send(source, SOURCE_ACTIONS, struct.pack("=I", ACTIONS))
+        serial = press(sender, actor)
+        sender.send(sender.device, DEVICE_DRAG,
+                    struct.pack("=IIII", source, sender.surface, 0, serial))
+        sender.until(sender.pointer, POINTER_LEAVE)
+        payload, _ = sender.until(sender.device, ENTER)
+        local_offer = struct.unpack("=IIiiI", payload)[-1]
         actor.fake(MOTION, x=TARGET_POINT, y=SOURCE_POINT)
         subject, enter = peer.client_message("XdndEnter")
+        # XdndEnter proves the server crossed into X11. The Wayland client can
+        # still have a reply to its previous offer queued before reading leave.
+        sender.send(local_offer, OFFER_ACTIONS, struct.pack("=II", COPY, COPY))
+        sender.sync()
         assert subject == target and enter[1] >> VERSION_SHIFT == version
         assert enter[1] & 1
         source_window = enter[0]

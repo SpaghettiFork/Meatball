@@ -357,6 +357,7 @@ Every check runs against the isolated module test host.
   transfers before and after drop, coalesced motion, drops awaiting status,
   overlapping drags, clipboard isolation, rejected drops, destroyed targets,
   disconnected sources, selection loss, retained X11 pointer grabs, and resets.
+  It also checks late Wayland action replies after crossing into an X11 target.
 - `native-drag` checks native pointer grabs, destination movement,
   copy/move/ask negotiation, pre-drop and post-drop transfers, legacy clients,
   multiple device bindings, source-less drags, cancellation, role and action
