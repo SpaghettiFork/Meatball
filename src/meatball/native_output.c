@@ -212,7 +212,7 @@ output_subpixel (int order)
 }
 
 static Bool
-update_output (ScreenPtr screen, RROutputPtr native)
+update_output (ScreenPtr screen, RROutputPtr native, Bool *layout_changed)
 {
     struct Output *output;
     struct OutputState state = { 0 };
@@ -286,10 +286,15 @@ update_output (ScreenPtr screen, RROutputPtr native)
             return FALSE;
         }
         wl_list_insert (compositor.outputs->outputs.prev, &output->link);
+        *layout_changed = TRUE;
     }
     output->seen = TRUE;
     if (memcmp (&output->state, &state, sizeof (state)))
     {
+        *layout_changed |= output->state.x != state.x ||
+                           output->state.y != state.y ||
+                           output->state.width != state.width ||
+                           output->state.height != state.height;
         output->state = state;
         wl_list_for_each (binding, &output->resources, link)
         {
@@ -457,6 +462,7 @@ mb_outputs_refresh (void)
 {
     struct Output *output;
     int screen_index;
+    Bool layout_changed = FALSE;
 
     if (!compositor.outputs)
         return;
@@ -480,11 +486,11 @@ mb_outputs_refresh (void)
 
                 if (native->connection == RR_Connected && native->crtc &&
                     native->crtc->mode && !native->nonDesktop &&
-                    !update_output (screen, native))
+                    !update_output (screen, native, &layout_changed))
                     goto fail;
             }
         }
-        else if (!update_output (screen, NULL))
+        else if (!update_output (screen, NULL, &layout_changed))
             goto fail;
     }
     wl_list_for_each (output, &compositor.outputs->outputs, link)
@@ -494,6 +500,7 @@ mb_outputs_refresh (void)
             struct OutputResource *binding;
 
             output->removed = TRUE;
+            layout_changed = TRUE;
             wl_list_for_each (binding, &output->resources, link)
             {
                 clear_memberships (binding, TRUE);
@@ -503,6 +510,8 @@ mb_outputs_refresh (void)
             wl_global_remove (output->global);
         }
     }
+    if (layout_changed)
+        mb_xdg_refresh_popup_layout ();
     refresh_surfaces ();
     return;
 
