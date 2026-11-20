@@ -95,8 +95,6 @@ struct MbSurface
     Bool input_changed;
     Bool attach_pending;
     MbBuffer *pending_buffer;
-    MbBuffer *buffer;
-    XID pixels;
     MbSurfaceContent *content;
     struct wl_list commits;
     int32_t width, height;

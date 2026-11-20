@@ -888,7 +888,7 @@ position_icon (struct DataDrag *drag)
         return TRUE;
     x = (int64_t)drag->position.root_x + drag->icon_x + icon->scene_x;
     y = (int64_t)drag->position.root_y + drag->icon_y + icon->scene_y;
-    if (!icon->pixels || drag->position.screen != icon->window.screen ||
+    if (!icon->content || drag->position.screen != icon->window.screen ||
         x < INT16_MIN || x > INT16_MAX || y < INT16_MIN || y > INT16_MAX)
     {
         UnmapWindow (window, FALSE);
@@ -912,7 +912,7 @@ shape_icon (MbSurface *surface)
     Bool overlap;
     int row, column;
 
-    if (!window || !surface->pixels)
+    if (!window || !surface->content)
         return TRUE;
     picture = mb_scene_picture (surface);
     bounds = RegionCreate (NULL, 0);

@@ -28,7 +28,7 @@ mb_cursor_create (MbClient *client, MbSurface *surface, int64_t x, int64_t y)
     ScreenPtr screen;
     int row, column, stride;
 
-    if (surface && surface->pixels)
+    if (surface && surface->content)
     {
         x -= surface->scene_x;
         y -= surface->scene_y;

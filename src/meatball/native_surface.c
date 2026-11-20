@@ -88,7 +88,7 @@ complete_frames (MbSurface *surface, CARD32 time)
     surface->frame_serial = 0;
 
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
-        !surface->pixels || mb_subsurface_root (surface) != surface)
+        !surface->content || mb_subsurface_root (surface) != surface)
         return;
     while ((node = mb_scene_next (&iterator)))
     {
@@ -222,7 +222,7 @@ redraw (MbSurface *surface)
         return TRUE;
     window = mb_window_get (&surface->window, DixGetAttrAccess);
     if (!window || (!window->realized && !mb_input_cursor_visible (surface)) ||
-        !surface->pixels)
+        !surface->content)
         return TRUE;
     return draw_frame (surface, window);
 }
@@ -484,8 +484,8 @@ apply_input (MbSurface *surface, WindowPtr native)
         input_default = FALSE;
         area = &aggregate;
     }
-    else if (surface->pixels && (surface->stack_count > 1 ||
-                                 surface->scene_x || surface->scene_y))
+    else if (surface->content && (surface->stack_count > 1 ||
+                                  surface->scene_x || surface->scene_y))
     {
         MbSceneIterator iterator = { .root = surface, .surface = surface };
         MbSurface *node;
@@ -708,8 +708,6 @@ mb_surface_commit_apply (MbSurfaceCommit *commit)
     content_unref (surface, surface->content);
     surface->content = commit->content;
     commit->content = NULL;
-    surface->buffer = surface->content ? surface->content->buffer : NULL;
-    surface->pixels = surface->content ? surface->content->pixels : None;
     pixman_region32_fini (&surface->input);
     surface->input = commit->input;
     pixman_region32_init (&commit->input);
@@ -766,7 +764,7 @@ mb_surface_update (MbSurface *surface)
     y2 = bounds.y2;
     offset = surface->offset_x || surface->offset_y || anchor_x || anchor_y ||
              surface->scene_x != x1 || surface->scene_y != y1;
-    if (!surface->pixels)
+    if (!surface->content)
     {
         surface->scene_width = surface->scene_height = 0;
         surface->scene_x = surface->scene_y = 0;

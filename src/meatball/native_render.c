@@ -24,13 +24,13 @@ surface_picture (MbSurface *surface)
                    surface->transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
     int error;
 
-    if (dixLookupResourceByType ((void **)&pixels, surface->pixels, RT_PIXMAP,
-                                 surface->client->native,
+    if (dixLookupResourceByType ((void **)&pixels, surface->content->pixels,
+                                 RT_PIXMAP, surface->client->native,
                                  DixReadAccess) != Success)
         return NULL;
     source_format =
         PictureMatchFormat (surface->window.screen, pixels->drawable.depth,
-                            surface->buffer->render_format);
+                            surface->content->buffer->render_format);
     if (!source_format)
         return NULL;
     source = CreatePicture (FakeClientID (surface->client->native->index),
@@ -127,7 +127,7 @@ scene_picture (MbSurface *surface, PictFormatPtr format)
                              surface->scene_height };
     int error;
 
-    if (!format || !surface->pixels)
+    if (!format || !surface->content)
         return NULL;
     pixels = surface->window.screen->CreatePixmap (
         surface->window.screen, surface->scene_width, surface->scene_height,
@@ -179,7 +179,7 @@ mb_surface_redraw (MbSurface *surface, WindowPtr window, CARD32 serial,
     int error;
 
     *submitted = FALSE;
-    if (!window->realized || !surface->pixels)
+    if (!window->realized || !surface->content)
         return TRUE;
     format = PictureWindowFormat (window);
     if (serial && format && window->drawable.width == surface->scene_width &&

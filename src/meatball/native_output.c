@@ -352,7 +352,7 @@ refresh_surfaces (void)
         WindowPtr window;
         Bool cursor = root->role == MB_ROLE_CURSOR;
 
-        if (!root->pixels || root->client->failed ||
+        if (!root->content || root->client->failed ||
             mb_subsurface_root (root) != root)
             continue;
         window = mb_window_get (&root->window, DixGetAttrAccess);
