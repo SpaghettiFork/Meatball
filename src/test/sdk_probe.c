@@ -46,6 +46,9 @@ __attribute__ ((used)) static __typeof__ (&dri3_open) open_device = dri3_open;
 __attribute__ ((
     used)) static __typeof__ (&dri3_get_supported_modifiers) query_modifiers =
     dri3_get_supported_modifiers;
+__attribute__ ((
+    used)) static __typeof__ (&dri3_pixmap_from_fds) import_dmabuf =
+    dri3_pixmap_from_fds;
 #endif
 
 __attribute__ ((used)) static DevPrivateKey output_private_key = &rrPrivKeyRec;

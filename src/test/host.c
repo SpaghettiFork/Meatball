@@ -9,6 +9,12 @@
 #include <xf86Module.h>
 #include <xf86Optionstr.h>
 
+#ifdef DRI3
+#include <dri3.h>
+#include <drm_fourcc.h>
+#include <shmint.h>
+#endif
+
 #define MODULE_PATH_ENV "MEATBALL_TEST_MODULE"
 #define MODULE_DATA_SYMBOL "sauceModuleData"
 #define SOCKET_PATH_ENV "MEATBALL_TEST_SOCKET"
@@ -16,6 +22,61 @@
 
 extern void __real_InitExtensions (int argc, char **argv);
 extern void __wrap_InitExtensions (int argc, char **argv);
+
+#ifdef DRI3
+#define TEST_DRI3_ENV "MEATBALL_TEST_DRI3"
+#define TEST_DRI3_DRIVER_VERSION 2
+
+static int
+test_dri3_formats (ScreenPtr screen, CARD32 *count, CARD32 **formats)
+{
+    static const CARD32 supported[] = { DRM_FORMAT_XRGB8888,
+                                        DRM_FORMAT_ARGB8888 };
+
+    *formats = malloc (sizeof (supported));
+    if (!*formats)
+        return FALSE;
+    memcpy (*formats, supported, sizeof (supported));
+    *count = ARRAY_SIZE (supported);
+    return TRUE;
+}
+
+static int
+test_dri3_modifiers (ScreenPtr screen, uint32_t format, uint32_t *count,
+                     uint64_t **modifiers)
+{
+    static const uint64_t supported[] = {
+        DRM_FORMAT_MOD_LINEAR,
+        DRM_FORMAT_MOD_INVALID,
+    };
+
+    *modifiers = malloc (sizeof (supported));
+    if (!*modifiers)
+        return FALSE;
+    memcpy (*modifiers, supported, sizeof (supported));
+    *count = format == DRM_FORMAT_XRGB8888 ? ARRAY_SIZE (supported) : 1;
+    return TRUE;
+}
+
+static PixmapPtr
+test_dri3_import (ScreenPtr screen, CARD8 count, const int *fds, CARD16 width,
+                  CARD16 height, const CARD32 *strides, const CARD32 *offsets,
+                  CARD8 depth, CARD8 bpp, CARD64 modifier)
+{
+    if (count != 1)
+        return NULL;
+    /* A test-only driver backed by the server's guarded SHM pixmaps. */
+    return shm_create_pixmap_from_fd (screen, fds[0], width, height, depth,
+                                      bpp, strides[0], offsets[0]);
+}
+
+static const dri3_screen_info_rec test_dri3 = {
+    .version = TEST_DRI3_DRIVER_VERSION,
+    .pixmap_from_fds = test_dri3_import,
+    .get_formats = test_dri3_formats,
+    .get_modifiers = test_dri3_modifiers,
+};
+#endif
 
 void
 __wrap_InitExtensions (int argc, char **argv)
@@ -52,5 +113,10 @@ __wrap_InitExtensions (int argc, char **argv)
                         minor);
     }
 
+#ifdef DRI3
+    if (getenv (TEST_DRI3_ENV) &&
+        !dri3_screen_init (screenInfo.screens[0], &test_dri3))
+        FatalError ("meatball-test: DRI3 test driver initialization failed\n");
+#endif
     __real_InitExtensions (argc, argv);
 }

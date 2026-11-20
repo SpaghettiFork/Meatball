@@ -4,7 +4,7 @@ sdk_probe = shared_module('meatball-sdk-probe', 'sdk_probe.c',
 
 if spaghetti_build_dir != ''
     host_hook = static_library('meatball-host-hook', 'host.c',
-                               dependencies: server_sdk)
+                               dependencies: [server_sdk, libdrm_dep])
     host_inputs = run_command(python, 'sdk_paths.py', spaghetti_build_dir,
                                'inputs', check: true).stdout().strip().split('\n')
     host_link_args = get_option('c_link_args')
@@ -70,6 +70,11 @@ if spaghetti_build_dir != ''
     test('native-subsurfaces', python,
          args: ['-B', files('native_subsurfaces.py'), test_host, sauce],
          timeout: 60)
+    if cc.has_header_symbol('xorg-server.h', 'DRI3', dependencies: server_sdk)
+        test('native-dmabuf', python,
+             args: ['-B', files('native_dmabuf.py'), test_host, sauce],
+             timeout: 30)
+    endif
     test('native-shm', python,
          args: ['-B', files('native_shm.py'), test_host, sauce],
          timeout: 30)
