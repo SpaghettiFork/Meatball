@@ -172,9 +172,11 @@ capabilities of the server's video DDX.
 The native module handles core Wayland requests and version 4 `wl_compositor`
 surfaces on Spaghetti's server thread, with native window ownership and
 committed input regions. SHM buffers use native imports and Render with an
-independent server copy for redraws. Buffer scales, all eight buffer
-transforms, and buffer-coordinate damage are supported. Surface dimensions are
-limited to 32767 in each direction.
+independent server copy for redraws. CPU-backed imports with the exact X
+image stride upload directly from the guarded mapping, avoiding a staging
+copy. Buffer scales, all eight buffer transforms, and buffer-coordinate
+damage are supported. Surface dimensions are limited to 32767 in each
+direction.
 
 Version 1 `wp_viewporter` supports cropping and destination sizing, including
 fractional source rectangles.

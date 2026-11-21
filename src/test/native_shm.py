@@ -24,6 +24,7 @@ X11_REPLY_SIZE = 32
 BYTES_PER_PIXEL = 4
 WIDTH = 2
 HEIGHT = 2
+TIGHT_STRIDE = WIDTH * BYTES_PER_PIXEL
 NORMAL_STRIDE = 12
 LARGE_STRIDE = 1 << 16
 BUFFER_OFFSET = 4
@@ -218,13 +219,15 @@ def main():
                 wait_socket(path, process)
                 root = root_window(setup)
                 if "--fault" in sys.argv:
+                    check_buffer(x11, root, path, TIGHT_STRIDE, SHM_ARGB8888, fault=True)
                     check_buffer(x11, root, path, NORMAL_STRIDE, SHM_XRGB8888, fault=True)
                     observer = Wayland(path)
                     observer.sync()
                     observer.close()
                     return
                 for format in [SHM_ARGB8888, SHM_XRGB8888]:
-                    check_buffer(x11, root, path, NORMAL_STRIDE, format)
+                    for stride in [TIGHT_STRIDE, NORMAL_STRIDE]:
+                        check_buffer(x11, root, path, stride, format)
                 check_buffer(x11, root, path, LARGE_STRIDE, SHM_XRGB8888, True)
                 check_buffer(x11, root, path, WIDTH * RGB16_BYTES, SHM_RGB565)
                 check_buffer(x11, root, path, PACKED_16_WIDTH * RGB16_BYTES,

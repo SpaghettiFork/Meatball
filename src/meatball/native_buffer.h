@@ -37,7 +37,7 @@ extern void mb_single_pixel_shutdown (void);
 extern PixmapPtr mb_pixmap_upload (ScreenPtr screen, unsigned int width,
                                    unsigned int height, unsigned int depth,
                                    char *pixels);
-/* Read the client pixels before release, into an independent pixmap. */
+/* Copy a newly imported SHM pixmap before releasing the client buffer. */
 extern PixmapPtr mb_pixmap_snapshot (PixmapPtr imported);
 
 #endif

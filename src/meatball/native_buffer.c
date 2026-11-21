@@ -174,12 +174,19 @@ mb_pixmap_snapshot (PixmapPtr imported)
 
     if (size > MB_MAX_SNAPSHOT_BYTES)
         return NULL;
-    pixels = malloc (size);
-    if (!pixels)
-        return NULL;
-    screen->GetImage (&imported->drawable, 0, 0, width, height, ZPixmap,
-                      MB_ALL_PLANES, pixels);
-    copy = mb_pixmap_upload (screen, width, height, depth, pixels);
-    free (pixels);
-    return copy;
+
+    /* Fast path for CPU-backed SHM pixmaps with the exact X image stride. */
+    if (imported->devPrivate.ptr && imported->devKind == stride)
+        return mb_pixmap_upload (screen, width, height, depth,
+                                 imported->devPrivate.ptr);
+    else {
+        pixels = malloc (size);
+        if (!pixels)
+            return NULL;
+        screen->GetImage (&imported->drawable, 0, 0,
+                          width, height, ZPixmap, MB_ALL_PLANES, pixels);
+        copy = mb_pixmap_upload (screen, width, height, depth, pixels);
+        free (pixels);
+        return copy;
+    }
 }
