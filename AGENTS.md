@@ -401,7 +401,10 @@ Xdnd versions 1 and 2 are not implemented.
 
 ## Still to port
 
-- Additional DMA-BUF formats.
+- Add XRGB1555 DMA-BUF support for 15-bit buffers.
+- Add ABGR8888 and XBGR8888 DMA-BUF support using FourCC-aware modifier
+  queries and imports in Spaghetti. Verify channel order and alpha blending
+  before advertising supported format and modifier pairs.
 - Follow the X11 desktop's integer scale via XSETTINGS (`Gdk/WindowScalingFactor`).
 - Leases.
 - Text-input-v3 is deferred.
