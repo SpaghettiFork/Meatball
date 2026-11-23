@@ -17,6 +17,7 @@
 #include "native_shm.h"
 #include "native_subsurface.h"
 #include "native_surface.h"
+#include "native_text_input.h"
 #include "native_viewport.h"
 #include "native_window.h"
 #include "native_xdg.h"
@@ -30,6 +31,7 @@ typedef struct
     struct wl_display *wl_display;
     struct wl_event_loop *wl_event_loop;
     char *socket_path;
+    uid_t socket_uid;
     struct MbAtoms atoms;
     RESTYPE window_type;
     struct wl_global *xdg_global;
@@ -43,6 +45,7 @@ typedef struct
     struct wl_list surfaces;
     struct wl_list clients;
     struct MbInput *input;
+    struct MbTextInput *text_input;
     struct MbOutputs *outputs;
     struct MbData *data;
     struct MbDmabuf *dmabuf;

@@ -83,6 +83,21 @@ single_pixel_code = custom_target('native-single-pixel-code',
                                   input: single_pixel_xml, output: 'single-pixel-buffer.c',
                                   command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 
+text_input_xml = 'wayland-proto/text-input-unstable-v3.xml'
+text_input_header = custom_target('native-text-input-header',
+                                  input: text_input_xml, output: 'text-input-v3.h',
+                                  command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+text_input_code = custom_target('native-text-input-code',
+                                input: text_input_xml, output: 'text-input-v3.c',
+                                command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+input_method_xml = 'wayland-proto/input-method-unstable-v2.xml'
+input_method_header = custom_target('native-input-method-header',
+                                    input: input_method_xml, output: 'input-method-v2.h',
+                                    command: [scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
+input_method_code = custom_target('native-input-method-code',
+                                  input: input_method_xml, output: 'input-method-v2.c',
+                                  command: [scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+
 srcs_meatball = [
     'meatball.c',
     build_version,
@@ -91,6 +106,7 @@ srcs_meatball = [
     'native_client.c',
     'native_keymap.c',
     'native_input.c',
+    'native_text_input.c',
     'native_data.c',
     'native_selection.c',
     'native_xdnd.c',
@@ -125,6 +141,10 @@ srcs_meatball = [
     system_bell_code,
     single_pixel_header,
     single_pixel_code,
+    text_input_header,
+    text_input_code,
+    input_method_header,
+    input_method_code,
 ]
 
 meatball_headers = declare_dependency(include_directories: '.')

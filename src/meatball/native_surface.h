@@ -21,6 +21,7 @@ typedef enum
     MB_ROLE_SUBSURFACE,
     MB_ROLE_CURSOR,
     MB_ROLE_DRAG_ICON,
+    MB_ROLE_INPUT_POPUP,
 } MbSurfaceRole;
 
 typedef struct
@@ -86,6 +87,7 @@ struct MbSurface
     struct MbXdgSurface *xdg;
     struct MbViewport *viewport;
     struct wl_resource *tearing_control;
+    struct wl_resource *input_popup;
     Bool tearing_async, pending_tearing_async;
     MbViewportState crop, pending_crop;
     MbWindow window;

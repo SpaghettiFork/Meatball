@@ -90,6 +90,8 @@ meatball_initialize (const struct meatball_config *config)
         errno = EINVAL;
         goto fail;
     }
+    compositor.socket_uid =
+        geteuid () == 0 ? directory.st_uid : socket_info.st_uid;
     if (geteuid () == 0 && fchownat (socket_fd, "", directory.st_uid,
                                      directory.st_gid, AT_EMPTY_PATH) < 0)
         goto fail;
@@ -102,9 +104,9 @@ meatball_initialize (const struct meatball_config *config)
         !mb_single_pixel_initialize () || !mb_dmabuf_initialize () ||
         !mb_xdg_initialize () || !mb_viewport_initialize () ||
         !mb_subsurfaces_initialize () || !mb_input_initialize () ||
-        !mb_outputs_initialize () || !mb_data_initialize () ||
-        !mb_selections_initialize () || !mb_xdnd_initialize () ||
-        !mb_loop_initialize ())
+        !mb_text_input_initialize () || !mb_outputs_initialize () ||
+        !mb_data_initialize () || !mb_selections_initialize () ||
+        !mb_xdnd_initialize () || !mb_loop_initialize ())
         goto fail;
     close (socket_fd);
     free (socket_fd_path);
@@ -132,6 +134,7 @@ meatball_shutdown (void)
     mb_selections_shutdown ();
     mb_data_shutdown ();
     mb_outputs_shutdown ();
+    mb_text_input_shutdown ();
     mb_input_shutdown ();
     mb_subsurfaces_shutdown ();
     mb_viewport_shutdown ();

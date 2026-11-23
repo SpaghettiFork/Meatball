@@ -4,6 +4,7 @@
 
 #include "native_data.h"
 #include "native_surface.h"
+#include "native_text_input.h"
 
 struct MbInput;
 extern Bool mb_input_begin_drag (uint64_t seat, MbSurface *origin,
@@ -19,6 +20,8 @@ extern MbDragPosition mb_input_drag_position (MbSurface *root, int32_t x,
                                               int32_t y, uint32_t time);
 extern void mb_input_end_drag (uint64_t seat);
 extern uint64_t mb_input_seat_id (struct wl_resource *resource);
+extern MbSurface *mb_input_keyboard_surface (uint64_t seat);
+extern Bool mb_input_text_keyboard (uint64_t seat, MbTextKeyboard *state);
 extern MbClient *mb_input_keyboard_client (uint64_t seat);
 extern Bool mb_input_selection_serial (uint64_t seat, MbClient *client,
                                        uint32_t serial);

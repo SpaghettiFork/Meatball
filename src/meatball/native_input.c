@@ -141,6 +141,7 @@ struct MbSeat
     uint32_t drag_enter_serial;
     ScreenPtr drag_screen;
     unsigned char keys[DOWN_LENGTH], buttons[DOWN_LENGTH];
+    unsigned char input_method_keys[DOWN_LENGTH];
     unsigned int button_count, grab_button;
     unsigned int relative_pointers;
     struct ScrollSample scroll;
@@ -250,15 +251,42 @@ record_serial (struct MbSeat *seat, MbClient *client, uint32_t serial,
     seat->serial_index = (seat->serial_index + 1) % INPUT_SERIAL_LIMIT;
 }
 
-MbClient *
-mb_input_keyboard_client (uint64_t id)
+MbSurface *
+mb_input_keyboard_surface (uint64_t id)
 {
     struct MbSeat *seat = find_seat_id (id);
 
     if (!seat || seat->removed || seat->retire_pending ||
         !seat->keyboard_focus || seat->keyboard_focus->client->failed)
         return NULL;
-    return seat->keyboard_focus->client;
+    return seat->keyboard_focus;
+}
+
+MbClient *
+mb_input_keyboard_client (uint64_t id)
+{
+    MbSurface *surface = mb_input_keyboard_surface (id);
+
+    return surface ? surface->client : NULL;
+}
+
+Bool
+mb_input_text_keyboard (uint64_t id, MbTextKeyboard *state)
+{
+    struct MbSeat *seat = find_seat_id (id);
+
+    if (!seat || seat->removed || seat->retire_pending ||
+        !(seat->capabilities & WL_SEAT_CAPABILITY_KEYBOARD))
+        return FALSE;
+    *state = (MbTextKeyboard){ .fd = seat->keymap_fd,
+                               .size = seat->keymap_size,
+                               .depressed = seat->modifiers.depressed,
+                               .latched = seat->modifiers.latched,
+                               .locked = seat->modifiers.locked,
+                               .group = seat->modifiers.group,
+                               .rate = seat->repeat_rate,
+                               .delay = seat->repeat_delay };
+    return TRUE;
 }
 
 Bool
@@ -1101,7 +1129,11 @@ keyboard_focus (struct MbSeat *seat, MbSurface *surface,
     seat->keyboard_focus = surface;
     memset (seat->keys, 0, sizeof (seat->keys));
     if (keys)
-        memcpy (seat->keys, keys, sizeof (seat->keys));
+        for (size_t i = 0; i < sizeof (seat->keys); i++)
+        {
+            seat->input_method_keys[i] &= keys[i];
+            seat->keys[i] = keys[i] & ~seat->input_method_keys[i];
+        }
     mb_data_keyboard_focus (seat->lifetime, surface ? surface->client : NULL);
     wl_list_for_each (input, &seat->resources, link)
     {
@@ -1113,6 +1145,7 @@ keyboard_focus (struct MbSeat *seat, MbSurface *surface,
         if (surface && surface->client == input->client)
             send_keyboard_enter (input, serial);
     }
+    mb_text_input_focus (seat->lifetime, surface);
 }
 
 static MbSurface *
@@ -1139,6 +1172,9 @@ modifiers_changed (struct MbSeat *seat, struct Modifiers modifiers)
         return;
     seat->modifiers = modifiers;
     serial = wl_display_next_serial (compositor.wl_display);
+    mb_text_input_modifiers (seat->lifetime, serial, modifiers.depressed,
+                             modifiers.latched, modifiers.locked,
+                             modifiers.group);
     wl_list_for_each (input, &seat->resources, link)
     {
         if (input->kind == RESOURCE_KEYBOARD && seat->keyboard_focus &&
@@ -1174,6 +1210,7 @@ repeat_changed (struct MbSeat *seat, int32_t rate, int32_t delay)
         return;
     seat->repeat_rate = rate;
     seat->repeat_delay = delay;
+    mb_text_input_repeat (seat->lifetime, rate, delay);
     wl_list_for_each (input, &seat->resources, link)
     {
         if (input->kind == RESOURCE_KEYBOARD && !input->client->failed &&
@@ -1534,6 +1571,7 @@ retire_seat (struct MbSeat *seat)
     if (seat->popup_grab)
         mb_xdg_dismiss_grab (seat->popup_grab);
     mb_data_seat_removed (seat->lifetime);
+    mb_text_input_seat_removed (seat->lifetime);
     repeat_changed (seat, 0, seat->repeat_delay);
     wl_global_remove (seat->global);
     wl_list_for_each (resource, &seat->resources, link)
@@ -2404,16 +2442,35 @@ keyboard_key (struct MbSeat *seat, const xXIDeviceEvent *event)
         mb_data_drag_cancel (seat->lifetime);
         return;
     }
-    if (!seat->keyboard_focus || key < XORG_KEYCODE_OFFSET ||
-        key >= KEYCODE_COUNT || (event->flags & XIKeyRepeat))
+    if (key < XORG_KEYCODE_OFFSET || key >= KEYCODE_COUNT ||
+        (event->flags & XIKeyRepeat))
         return;
-    if (pressed == !!BitIsOn (seat->keys, key))
+    if (BitIsOn (seat->input_method_keys, key))
+    {
+        if (!pressed)
+        {
+            ClearBit (seat->input_method_keys, key);
+            serial = wl_display_next_serial (compositor.wl_display);
+            mb_text_input_key (seat->lifetime, serial, event->time,
+                               key - XORG_KEYCODE_OFFSET,
+                               WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
         return;
+    }
+    if (!seat->keyboard_focus || pressed == !!BitIsOn (seat->keys, key))
+        return;
+    serial = wl_display_next_serial (compositor.wl_display);
+    if (pressed && mb_text_input_key (seat->lifetime, serial, event->time,
+                                      key - XORG_KEYCODE_OFFSET,
+                                      WL_KEYBOARD_KEY_STATE_PRESSED))
+    {
+        SetBit (seat->input_method_keys, key);
+        return;
+    }
     if (pressed)
         SetBit (seat->keys, key);
     else
         ClearBit (seat->keys, key);
-    serial = wl_display_next_serial (compositor.wl_display);
     wl_list_for_each (input, &seat->resources, link)
     {
         if (input->kind == RESOURCE_KEYBOARD &&
@@ -2705,6 +2762,7 @@ mb_input_dispatch (void)
         case INPUT_KEYMAP:
         {
             struct InputResource *resource;
+            MbTextKeyboard keyboard;
             uint32_t serial = wl_display_next_serial (compositor.wl_display);
 
             if (seat->keymap_fd != INVALID_KEYMAP_FD)
@@ -2729,6 +2787,8 @@ mb_input_dispatch (void)
                         seat->modifiers.group);
             }
             repeat_changed (seat, event->repeat_rate, event->repeat_delay);
+            if (mb_input_text_keyboard (seat->lifetime, &keyboard))
+                mb_text_input_keyboard (seat->lifetime, &keyboard);
             break;
         }
         }
