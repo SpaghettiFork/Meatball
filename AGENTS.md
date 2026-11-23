@@ -30,6 +30,7 @@ native_data.c/.h          clipboard and drag-and-drop transfers
 native_selection.c/.h     asynchronous X11 selection conversions
 native_xdnd.c/.h          X11 drag-and-drop negotiation
 native_input.c/.h         pointer and keyboard routing, grabs
+native_text_input.c/.h    text input and input method transactions, candidate popups
 native_keymap.c/.h        sealed keymap descriptors
 native_output.c/.h        wl_output globals and surface membership
 native_render.c           Render protocol drawing
@@ -48,8 +49,8 @@ wayland-proto/            protocol XML, scanned by wayland-scanner
 `src/meatball/wayland-proto/` holds the upstream protocol definitions.
 The build scans xdg-shell, xdg-output-unstable-v1, viewporter,
 primary-selection-unstable-v1, linux-dmabuf, pointer-constraints-unstable-v1,
-relative-pointer-unstable-v1, tearing-control-v1, xdg-system-bell-v1, and
-single-pixel-buffer-v1.
+relative-pointer-unstable-v1, tearing-control-v1, xdg-system-bell-v1,
+single-pixel-buffer-v1, text-input-unstable-v3, and input-method-unstable-v2.
 
 `src/test/` contains the isolated module test host (`build_host.py`,
 `host.c`, `host_smoke.py`, `host_support.py`), the SDK discovery and probe
@@ -322,6 +323,20 @@ focus and become inert when it is removed. Each relative sample ends with
 suppresses absolute motion. Timestamps express Xorg's millisecond event
 clock in microseconds.
 
+Version 1 `zwp_text_input_manager_v3` follows each seat's keyboard focus and
+applies enable, surrounding text, content type, change cause, and cursor
+rectangle requests on text-input commits. A connected `zwp_input_method_v2`
+can send preedit, commit strings, and surrounding-text deletions as a single
+transaction. Commit serials and focus changes keep edits within the active
+text field. One input method can register per seat.
+
+The input-method global is visible to connections with the Wayland socket
+owner's UID. An input method on that connection can receive text surrounding
+the cursor and grab keys while a text field is active. Candidate popups use
+native override-redirect windows anchored to the committed cursor rectangle.
+They disappear on disable or focus loss. Input methods that forward unhandled
+keys through `zwp_virtual_keyboard_v1` still need that protocol support.
+
 Version 1 `xdg_system_bell_v1` rings the requesting client's XKB core
 keyboard bell using its configured volume and audible-bell setting. Requests
 can associate the XKB bell notification with a native toplevel window or ring
@@ -407,7 +422,6 @@ Xdnd versions 1 and 2 are not implemented.
   before advertising supported format and modifier pairs.
 - Follow the X11 desktop's integer scale via XSETTINGS (`Gdk/WindowScalingFactor`).
 - Leases.
-- Text-input-v3 is deferred.
 - Server-side decoration negotiation.
 
 ## Test inventory
@@ -474,6 +488,8 @@ Every check runs against the isolated module test host.
 - `native-input` injects XTEST pointer and keyboard events, exercises focus and
   implicit grabs, and checks modifiers, repeat controls, client isolation,
   subsurface destruction, and master-device hotplug.
+- `native-text-input` checks focus, buffered UTF-8 edits, stale commits,
+  duplicate input methods, keyboard grabs, and candidate popup visibility.
 - `native-scroll` sends XI2 touchpad valuators and checks fractional deltas,
   diagonal scroll frames, emulated button suppression, and discrete wheels.
 - `native-constraints` checks X11 cursor positions, lock motion suppression,

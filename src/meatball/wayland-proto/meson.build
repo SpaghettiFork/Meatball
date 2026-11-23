@@ -1,6 +1,7 @@
 wayland_protos = [
     'drm-lease-v1.xml',
     'idle-inhibit-unstable-v1.xml',
+    'input-method-unstable-v2.xml',
     'keyboard-shortcuts-inhibit-unstable-v1.xml',
     'linux-dmabuf-unstable-v1.xml',
     'linux-explicit-synchronization-unstable-v1.xml',

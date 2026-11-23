@@ -307,6 +307,7 @@ surface_output (MbClient *client, const void *message, size_t size)
             if (mb_xdnd_event (surface, event))
                 return;
             mb_xdg_event (surface, event);
+            mb_text_input_window_changed (surface);
             if (native && !apply_input (surface, native))
             {
                 wl_resource_post_no_memory (surface->resource);
@@ -330,6 +331,7 @@ surface_destroyed (struct wl_resource *resource)
     mb_data_surface_destroyed (surface);
     mb_outputs_surface_destroyed (surface);
     mb_input_surface_destroyed (surface);
+    mb_text_input_popup_destroyed (surface);
     mb_subsurface_surface_destroyed (surface);
     mb_xdg_surface_destroyed (surface);
     mb_viewport_surface_destroyed (surface);
@@ -851,7 +853,8 @@ mb_surface_update (MbSurface *surface)
     if (!apply_input (surface, native) || !mb_data_icon_changed (surface))
         goto fail;
     surface->offset_x = surface->offset_y = 0;
-    if (!mb_xdg_map (surface) || !redraw (surface))
+    if (!mb_xdg_map (surface) || !mb_text_input_popup_update (surface) ||
+        !redraw (surface))
         goto fail;
     return TRUE;
 
