@@ -40,6 +40,7 @@ OFFER_ACTIONS = 4
 MIME_TEXT = "text/plain;charset=utf-8"
 MIME_BINARY = "application/octet-stream"
 MIME_UNKNOWN = "application/x-meatball-unsupported"
+SAVE_TARGETS = "SAVE_TARGETS"
 PAYLOAD = "Meatball clipboard: zażółć\n".encode()
 LARGE_BYTES = 1024 * 1024
 COPY = 1
@@ -177,6 +178,14 @@ def check_clipboard(path, display, process):
         sender.set_selection(source, serial)
         own_offer, events = sender.selection()
         assert offered(events, own_offer) == [MIME_TEXT, MIME_BINARY]
+        # GTK 3 can add a persistence target and repeat the same selection.
+        sender.send(source, SOURCE_OFFER, string_argument(SAVE_TARGETS))
+        sender.set_selection(source, serial)
+        events = sender.roundtrip_events()
+        assert not any((obj == source and opcode == SOURCE_CANCELLED) or
+                       (obj == sender.device and opcode in (DATA_OFFER, SELECTION))
+                       for obj, opcode, _ in events)
+        transfer(sender, source, sender, own_offer)
         peer_serial, events = focus(receiver, actor, receiver_window)
         offers = [struct.unpack("=I", data)[0] for object_id, opcode, data in events
                   if object_id == receiver.device and opcode == SELECTION]
@@ -335,6 +344,9 @@ def check_errors(path, display):
                 client.set_selection(source, serial)
                 offer, _ = client.selection()
                 if request == "reuse":
+                    replacement = client.source()
+                    client.set_selection(replacement, serial)
+                    client.selection()
                     client.set_selection(source, serial)
                 elif request == "finish-selection":
                     client.send(offer, OFFER_FINISH)

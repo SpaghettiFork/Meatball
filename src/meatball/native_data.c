@@ -21,6 +21,7 @@
 #define SOURCE_MIME_LIMIT 256
 #define SOURCE_MIME_BYTES_LIMIT (64 * 1024)
 #define MIME_LENGTH_LIMIT 4096
+#define SAVE_TARGETS_ATOM_NAME "SAVE_TARGETS"
 #define ICON_ALPHA_SHIFT 24
 /* This error is absent from older Wayland SDK headers. */
 #define DATA_DEVICE_USED_SOURCE 1
@@ -407,6 +408,11 @@ source_offer (struct wl_client *client, struct wl_resource *resource,
 
     if (source->use != SOURCE_UNUSED)
     {
+        /* GTK 3 can append this clipboard persistence target after claiming
+         * the selection. Keep the published MIME types as they were. */
+        if (source->use == SOURCE_SELECTION && !source->primary &&
+            !source->cancelled && !strcmp (mime, SAVE_TARGETS_ATOM_NAME))
+            return;
         if (!source->primary)
             wl_resource_post_error (resource,
                                     WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
@@ -735,6 +741,8 @@ set_selection (struct wl_client *client, struct wl_resource *resource,
         return;
     if (source && source->use != SOURCE_UNUSED)
     {
+        if (source == selection->source && serial == selection->serial)
+            return;
         if (device->kind == MB_SELECTION_CLIPBOARD)
             wl_resource_post_error (resource, DATA_DEVICE_USED_SOURCE,
                                     "data source has already been used");
