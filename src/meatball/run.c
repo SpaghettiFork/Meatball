@@ -28,6 +28,11 @@ loop_wakeup (void *data, int result)
 static void
 loop_block (void *data, void *timeout)
 {
+    /* The native client wakeup handles bridge loss. Xorg can run block
+     * handlers before polling that wakeup FD.
+     */
+    if (!compositor.bridge_client->native)
+        return;
     mb_clients_check ();
     mb_xdg_refresh_shapes ();
     mb_selections_dispatch ();
@@ -42,6 +47,8 @@ loop_block (void *data, void *timeout)
 static void
 loop_ready (int fd, int ready, void *data)
 {
+    if (!compositor.bridge_client->native)
+        return;
     if ((ready & X_NOTIFY_ERROR) ||
         wl_event_loop_dispatch (compositor.wl_event_loop, 0) < 0)
     {
