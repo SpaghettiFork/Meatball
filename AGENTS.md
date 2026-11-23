@@ -373,7 +373,10 @@ keyboard focus controls which client receives selection offers. Ownership
 changes require a serial delivered to that client on that seat. Transfers pass
 the destination's file descriptor directly to the source, including transfers
 larger than a pipe buffer. The server loop remains responsive while a reader is
-blocked. The selection clears when its source is destroyed.
+blocked. The selection clears when its source is destroyed. For GTK 3
+compatibility, Meatball ignores a late `SAVE_TARGETS` offer on the active
+clipboard source. Repeating the same active source and serial leaves the
+published clipboard intact.
 
 Drag-and-drop validates the origin's implicit button grab, follows committed
 surface-tree stacking and input regions, and negotiates copy, move, and ask
@@ -516,8 +519,8 @@ Every check runs against the isolated module test host.
   synchronized child commits, cursor updates, output binding/removal, and server
   reset.
 - `native-data` checks clipboard focus and serial validation, source
-  replacement, MIME offers, large and blocked transfers, protocol versions,
-  disconnects, and reset cleanup.
+  replacement, MIME offers, GTK 3 clipboard claims, large and blocked
+  transfers, protocol versions, disconnects, and reset cleanup.
 - `native-selections` checks X11 clipboard ownership, text and binary MIME
   negotiation, timestamps, unsupported targets, small and large transfers in
   both directions, INCR backpressure, omitted size hints, large property chunks,
