@@ -33,6 +33,9 @@ if spaghetti_build_dir != ''
     test('native-input', python,
          args: ['-B', files('native_input.py'), test_host, sauce],
          timeout: 60)
+    test('native-text-input', python,
+         args: ['-B', files('native_text_input.py'), test_host, sauce],
+         timeout: 30)
     test('native-scroll', python,
          args: ['-B', files('native_scroll.py'), test_host, sauce],
          timeout: 30)
