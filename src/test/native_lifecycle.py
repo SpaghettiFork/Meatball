@@ -22,6 +22,8 @@ RESET_ATTEMPTS = 3
 CUSTOM_SOCKET_MODE = 0o640
 SOCKET_PREFIX = "wayland-meatball-"
 KILL_CLIENT = 113
+SET_SELECTION_OWNER = 22
+XA_PRIMARY = 1
 
 
 def check_extension(connection):
@@ -126,7 +128,13 @@ def check_bridge_closed(host, module, path):
             wait_socket(path, process)
             window, = query_tree(connection, root_window(setup))
             with connect_wayland(path) as old:
-                connection.sendall(struct.pack("<BBHI", KILL_CLIENT, 0, 2, window))
+                # Destroying the selection window dirties PRIMARY before the
+                # bridge's deferred disconnect is processed.
+                connection.sendall(
+                    struct.pack("<BBHIII", SET_SELECTION_OWNER, 0, 4,
+                                window, XA_PRIMARY, 0)
+                    + struct.pack("<BBHI", KILL_CLIENT, 0, 2, window)
+                )
                 try:
                     assert old.recv(1) == b"", "Wayland client survived bridge loss"
                 except ConnectionResetError:

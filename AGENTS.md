@@ -437,7 +437,8 @@ Every check runs against the isolated module test host.
   client connection.
 - `native-lifecycle` loads the actual module and checks resets, socket
   cleanup, late and recreated runtime directories, recovery after native
-  bridge closure, failed startup, and conflicting listeners.
+  bridge closure with pending selection changes, failed startup, and
+  conflicting listeners.
 - `native-loop` checks Wayland round trips alongside X11 traffic and a client
   that leaves replies unread.
 - `native-scheduler` exercises Wayland idle handlers, timers, pipe reads,
