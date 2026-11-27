@@ -27,7 +27,8 @@ Expect bugs, crashes and data loss!
 
 ### How do I use this?
 
-You need a copy of Spaghetti from [this branch](https://github.com/notbabaisyou/SpaghettiDev/tree/meatball) along with this repository.
+You need a build of Spaghetti 27.0 or newer to run Meatball, along with
+this repository.
 
 ```sh
 meson setup src/builddir src -Dspaghetti_build_dir=/path/to/spaghetti/build
